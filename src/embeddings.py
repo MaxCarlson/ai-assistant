@@ -1,33 +1,94 @@
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from dotenv import load_dotenv
 import os
-from ChatGPTConversions import ChatGPTConversations
+import numpy as np
+import requests
+import faiss
+from dotenv import load_dotenv
 from transformers import GPT2TokenizerFast
+from ChatGPTConversions import ChatGPTConversations
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from sentence_transformers import SentenceTransformer
+#import torch
 
-# Load environment variables
-load_dotenv()
-GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY_AI_ASSISTANT')
+# Define the scope required for the Generative Language API
+#SCOPES = ['https://www.googleapis.com/auth/generative-language']
+#
+## Path to your OAuth credentials file
+#CLIENT_SECRET_FILE = 'oauth2_credentials.json'
+#
+## Authenticate using OAuth 2.0
+#flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, SCOPES)
+#creds = flow.run_local_server(port=0)
+#
+## Use the access token in headers for API requests
+#headers = {
+#    'Authorization': f'Bearer {creds.token}',
+#    'Content-Type': 'application/json'
+#}
 
-max_tokens = 4096
+# Define the embedding model URL
+#embedding_model_url = "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent"
+#
+## Function to generate embeddings
+#def generate_embedding(text_chunk):
+#    response = requests.post(embedding_model_url, headers=headers, json={
+#        "model": "models/text-embedding-004",
+#        "content": {"parts": [{"text": text_chunk}]},
+#        "task_type": "retrieval_document"
+#    })
+#    if response.status_code == 200:
+#        return response.json().get("embedding", [])
+#    else:
+#        raise Exception(f"Error {response.status_code}: {response.text}")
+#    
+
+# Load a Sentence Transformer model with GPU support for embeddings
+embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+embedding_model = embedding_model.to('cuda')  # Move model to GPU
+
+# Function to generate embeddings using the local Sentence Transformer model
+def generate_embedding(text_chunk):
+    # Ensure the text chunk is converted to the format the model expects
+    embeddings = embedding_model.encode(text_chunk, convert_to_tensor=True, device='cuda')
+    return embeddings.cpu().numpy()  # Move embeddings back to CPU if needed
+
 
 # Initialize the GPT-2 tokenizer for token counting
+max_tokens = 1024
 tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
 
-# Initialize the Gemini Pro model for chat and embedding purposes
-llm = ChatGoogleGenerativeAI(model="gemini-pro", google_api_key=GOOGLE_API_KEY)
-
-# Helper function to split conversation into chunks based on token limit
-def chunk_text_by_tokens(text, max_tokens, tokenizer):
-    tokens = tokenizer.encode(text)
+# Helper function to chunk text by character length first, then tokenize within limits
+def adaptive_chunk_text_by_tokens(text, max_tokens, tokenizer, initial_chars_per_token=4):
     chunks = []
-    
-    # Split tokens into chunks based on max_tokens limit
-    for i in range(0, len(tokens), max_tokens):
-        chunk_tokens = tokens[i:i + max_tokens]
-        chunk_text = tokenizer.decode(chunk_tokens)
-        chunks.append(chunk_text)
-    
+    start_idx = 0
+
+    while start_idx < len(text):
+        # Start with an optimistic chunk size based on initial_chars_per_token
+        chars_per_token = initial_chars_per_token
+        end_idx = min(len(text), start_idx + max_tokens * chars_per_token)
+        chunk = text[start_idx:end_idx]
+        
+        # Tokenize and check if the chunk meets the token limit
+        tokens = tokenizer.encode(chunk)
+        while len(tokens) > max_tokens:
+            # If the chunk is too large, decrease chars_per_token conservatively
+            chars_per_token -= 0.5
+            end_idx = min(len(text), start_idx + int(max_tokens * chars_per_token))
+            chunk = text[start_idx:end_idx]
+            tokens = tokenizer.encode(chunk)
+
+            # Safety check to avoid infinite loop if chars_per_token becomes too small
+            if chars_per_token < 1.5:
+                # Break by tokens if chars_per_token is too small and chunk is still too large
+                token_chunks = [tokens[i:i + max_tokens] for i in range(0, len(tokens), max_tokens)]
+                chunks.extend([tokenizer.decode(token_chunk) for token_chunk in token_chunks])
+                start_idx = end_idx  # Move to the next chunk position
+                break
+        else:
+            # If the chunk fits within the token limit, add it to chunks
+            chunks.append(chunk)
+            start_idx = end_idx  # Move to the next chunk position
+
     return chunks
 
 # Load ChatGPT conversations
@@ -47,23 +108,25 @@ for chat in chats:
         combined_content.append(f"{author}: {content}")
     
     # Join all messages into one string (a full conversation)
-    full_conversation = "\n".join(combined_content)
-
-    # Tokenize and chunk conversation if needed
-    num_tokens = len(tokenizer.encode(full_conversation))
-    
-    if num_tokens > max_tokens:
-        # Chunk the conversation into smaller parts
-        conversation_chunks = chunk_text_by_tokens(full_conversation, max_tokens, tokenizer)
-    else:
-        # If it's within the limit, process it as a single chunk
-        conversation_chunks = [full_conversation]
+    full_conversation = "\n".join(combined_content)   
+    conversation_chunks = adaptive_chunk_text_by_tokens(full_conversation, max_tokens, tokenizer)
 
     # Generate embeddings for each chunk and store them
     for chunk in conversation_chunks:
-        response = llm.invoke(chunk)
-        embedding = response.content  # The content field holds the response embedding or output
+        # Call the Google API to generate embeddings for this chunk
+        embedding = generate_embedding(chunk)
         all_embeddings.append(embedding)
 
 # Check the first embedding
-print(all_embeddings[0])
+#print(all_embeddings[0])
+
+# Convert your list of embeddings to a numpy array
+embeddings = np.array(all_embeddings).astype('float32')
+
+# Initialize a FAISS index (using L2 similarity here)
+dimension = embeddings.shape[1]  # dimensionality of the embeddings
+index = faiss.IndexFlatL2(dimension)
+index.add(embeddings)  # Add embeddings to the index
+
+# Save the index to a file
+faiss.write_index(index, "embeddings_index.faiss")
