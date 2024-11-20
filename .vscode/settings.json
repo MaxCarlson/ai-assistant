@@ -1,0 +1,13 @@
+{
+    "python.defaultInterpreterPath": "/home/mcarls/miniconda3/envs/ai-assistant/bin/python",
+    "terminal.integrated.profiles.linux": {
+        "bash": {
+            "path": "zsh",
+            "args": [
+                "-c", 
+                "conda activate ai-assistant && exec zsh"
+            ]
+        }
+    },
+    "terminal.integrated.defaultProfile.linux": "zsh"
+}
