@@ -6,11 +6,11 @@ import os
 from alive_progress import alive_bar
 
 # Path to your notes directory
-notes_dir = os.path.expanduser("/mnt/c/Users/mcarls/Documents/Obsidian-Vault/Learning/")
+notes_dir = os.path.expanduser("/mnt/c/Users/mcarls/Documents/Obsidian-Vault")
 
 # Initialize a text splitter
 text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=500,
+    chunk_size=1000,
     chunk_overlap=50,
     separators=["\n\n", "\n", " "]
 )
