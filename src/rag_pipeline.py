@@ -14,6 +14,30 @@ class RAGPipeline:
         self.embedding_manager = embedding_manager
         self.llm_manager = llm_manager
         self.top_k = top_k
+        
+    def trim_input(context, query, max_tokens=2048, reserve_tokens=256):
+        """
+        Trims context to fit within the model's token limit.
+
+        :param context: Retrieved context string.
+        :param query: User query string.
+        :param max_tokens: Maximum token limit for the model.
+        :param reserve_tokens: Tokens reserved for the query and response.
+        :return: Trimmed context and query.
+        """
+        query_tokens = tokenizer.encode(query, add_special_tokens=False)
+        context_tokens = tokenizer.encode(context, add_special_tokens=False)
+
+        # Reserve space for the query and response
+        available_tokens = max_tokens - reserve_tokens - len(query_tokens)
+
+        # Trim the context if it exceeds available tokens
+        if len(context_tokens) > available_tokens:
+            context_tokens = context_tokens[:available_tokens]
+
+        # Decode trimmed context
+        trimmed_context = tokenizer.decode(context_tokens)
+        return trimmed_context, query
 
     def query(self, query_text):
         """
@@ -46,17 +70,19 @@ class RAGPipeline:
             )
         else:
             prompt = (
-                f"You are an AI assistant with knowledge of my past projects and notes.\n"
-                f"Context:\n{context}\n\n"
-                f"Question: {query_text}\n\n"
-                f"Please provide a clear and concise answer based on the context above."
+                f"You are an AI assistant helping with knowledge retrieval and synthesis.\n\n"
+                f"Context (retrieved from my notes):\n{context}\n\n"
+                f"Based on the above context, answer the following question concisely and clearly:\n"
+                f"{query_text}\n\n"
+                f"Provide a short, synthesized answer. Do not simply repeat the context."
             )
+
 
         # Step 3: Generate a response using the LLM
         response = self.llm_manager.generate(prompt)
 
         # Truncate long responses
-        max_response_length = 2000
+        max_response_length = 10000
         if len(response) > max_response_length:
             response = response[:max_response_length] + "\n[Response truncated.]"
         return response

@@ -1,14 +1,9 @@
-import os
-import numpy as np
-import requests
-import faiss
-from dotenv import load_dotenv
 from transformers import GPT2TokenizerFast
-from ChatGPTConversions import ChatGPTConversations
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from sentence_transformers import SentenceTransformer
 from alive_progress import alive_bar
+from ChatGPTConversions import ChatGPTConversations
+#from google.oauth2.credentials import Credentials
+#from google_auth_oauthlib.flow import InstalledAppFlow
+#from sentence_transformers import SentenceTransformer
 from settings import EMBEDDINGS_DIRECTORY
 from embedding_manager import EmbeddingManager
 

@@ -47,8 +47,8 @@ def cli_mode(rag_pipeline):
         try:
             response = rag_pipeline.query(query)
             print("\nResponse:")
-            print(response[:2000])  # Print only the first 2000 characters for long responses
-            if len(response) > 2000:
+            print(response[:20000])  # Print only the first 2000 characters for long responses
+            if len(response) > 20000:
                 print("\n[Response truncated. Consider refining your query.]")
             print("\n" + "-" * 50)
         except Exception as e:
@@ -71,6 +71,36 @@ def streamlit_mode(rag_pipeline):
             response = rag_pipeline.query(query)
         st.subheader("Response:")
         st.write(response)
+        
+def inspect_mode(embedding_manager, top_k=5):
+    """
+    Run the app in FAISS inspection mode.
+
+    :param embedding_manager: Instance of EmbeddingManager to handle queries.
+    :param top_k: Number of top results to retrieve.
+    """
+    print("\nWelcome to the FAISS Debug Tool")
+    print("Type 'exit' to quit.\n")
+
+    while True:
+        query = input("Enter your query: ")
+        if query.lower() == "exit":
+            print("Exiting FAISS Debug Tool.")
+            break
+
+        try:
+            results = embedding_manager.debug_query(query, top_k=top_k)
+            if not results:
+                print("\nNo relevant results found.")
+            else:
+                print("\nRetrieved Results:")
+                for result in results:
+                    print(f"Rank: {result['rank']}")
+                    print(f"Score: {result['score']:.4f}")
+                    print(f"Content: {result['content']}\n")
+        except Exception as e:
+            print(f"Error processing your query: {e}")
+
 
 
 def main():
@@ -106,8 +136,8 @@ def main():
         "--mode",
         type=str,
         default="cli",
-        choices=["cli", "streamlit"],
-        help="Mode to run the app ('cli' or 'streamlit').",
+        choices=["cli", "streamlit", "inspect"],
+        help="Mode to run the app ('cli', 'streamlit', 'inspect').",
     )
     args = parser.parse_args()
 
@@ -124,6 +154,8 @@ def main():
         cli_mode(rag_pipeline)
     elif args.mode == "streamlit":
         streamlit_mode(rag_pipeline)
+    elif args.mode == "inspect":
+        inspect_mode(embedding_manager, args.top_k)
 
 
 if __name__ == "__main__":

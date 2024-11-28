@@ -1,7 +1,10 @@
-import faiss
-from sentence_transformers import SentenceTransformer
+import json
+import os
 import numpy as np
 import json
+import faiss
+from sentence_transformers import SentenceTransformer
+
 
 
 class EmbeddingManager:
@@ -46,48 +49,53 @@ class EmbeddingManager:
 
     def load_index(self, index_path):
         """
-        Load an existing FAISS index and validate model consistency.
-
-        :param index_path: Path to the saved FAISS index file.
+        Load a FAISS index and model metadata from a file.
         """
+        if not os.path.exists(index_path):
+            raise FileNotFoundError(f"FAISS index file not found: {index_path}")
+        
         # Load the FAISS index
         self.index = faiss.read_index(index_path)
 
-        # Load and validate model metadata
+        # Load metadata
         metadata_path = index_path.replace(".faiss", ".meta.json")
-        with open(metadata_path, "r") as f:
-            saved_metadata = json.load(f)
+        if os.path.exists(metadata_path):
+            with open(metadata_path, "r") as f:
+                metadata = json.load(f)
+                self.model_name = metadata["model_name"]
+                self.index_type = metadata["index_type"]
+                self.embedding_dim = metadata["embedding_dim"]
+                self.metadata["documents"] = metadata.get("documents", {})
+        else:
+            print(f"No metadata file found for {index_path}. Metadata will not be loaded.")
+            self.metadata["documents"] = {}
 
-        if saved_metadata["model_name"] != self.model_name:
-            raise ValueError(
-                f"Model mismatch: Index was created with '{saved_metadata['model_name']}', "
-                f"but the current model is '{self.model_name}'."
-            )
-        print(
-            f"FAISS index loaded from {index_path}. Model verified as {self.model_name}."
-        )
+        print(f"FAISS index and metadata loaded from {index_path}.")
+
 
     def save_index(self, index_path):
         """
         Save the current FAISS index and model metadata to a file.
-
-        :param index_path: Path to save the FAISS index file.
         """
         if self.index is None:
             raise RuntimeError("No index to save. Create or load an index first.")
+        
+        # Save the FAISS index
         faiss.write_index(self.index, index_path)
 
-        # Save metadata about the model and index
+        # Save metadata, including documents
         metadata_path = index_path.replace(".faiss", ".meta.json")
         metadata = {
             "model_name": self.model_name,
             "index_type": self.index_type,
             "embedding_dim": self.embedding_dim,
+            "documents": self.metadata.get("documents", {}),
         }
         with open(metadata_path, "w") as f:
             json.dump(metadata, f)
 
-        print(f"FAISS index and metadata saved to {index_path}.")
+        print(f"FAISS index and metadata saved to {index_path} and {metadata_path}.")
+
 
     def add_documents(self, documents):
         """
@@ -121,45 +129,65 @@ class EmbeddingManager:
         """
         if self.index is None:
             raise RuntimeError("Create or load an index before querying.")
-        
+
+        # Generate query embedding
         query_embedding = self.embedding_model.encode([text], convert_to_numpy=True)
-        distances, indices = self.index.search(query_embedding, top_k)
-        
-        results = []
-        for i, idx in enumerate(indices[0]):
-            if idx in self.metadata:
-                result = self.metadata[idx]
-                result["distance"] = distances[0][i]
-                results.append(result)
-        
-        return results
-    
-    def debug_query(self, query, top_k=5):
-        """
-        Run a query against the FAISS database and inspect the retrieved results.
 
-        :param query: The input query string.
-        :param top_k: Number of results to retrieve.
-        :return: A list of retrieved documents with scores (if available).
-        """
-        if self.index is None:
-            raise RuntimeError("No FAISS index is loaded. Please load or create an index first.")
-
-        # Generate the embedding for the query
-        query_embedding = self.embedding_model.encode(query, convert_to_tensor=True).cpu().numpy()
+        # Ensure correct query shape
+        query_embedding = query_embedding.reshape(1, -1)
 
         # Perform FAISS search
         distances, indices = self.index.search(query_embedding, top_k)
-        
+
+        # Retrieve results
         results = []
         for i, idx in enumerate(indices[0]):
-            if idx != -1:  # Ensure valid result
-                metadata = self.metadata_store[idx] if self.metadata_store else {}
+            if idx == -1:
+                results.append({"content": "No content available", "distance": None})
+            else:
+                # Access metadata from self.metadata["documents"]
+                document_metadata = self.metadata.get("documents", {}).get(str(idx), {})
+                document_metadata["distance"] = distances[0][i]
+                results.append(document_metadata)
+
+        return results
+
+    def debug_query(self, query, top_k=5):
+        """
+        Run a query against the FAISS database and inspect the retrieved results.
+        """
+        if self.index is None:
+            raise RuntimeError("No FAISS index is loaded. Please load or create an index first.")
+        
+        if "documents" not in self.metadata or len(self.metadata["documents"]) != self.index.ntotal:
+            raise ValueError(
+                f"Number of documents ({len(self.metadata.get('documents', {}))}) does not match "
+                f"number of vectors in FAISS index ({self.index.ntotal})."
+            )
+
+        # Generate query embedding
+        query_embedding = self.embedding_model.encode(query, convert_to_tensor=True).cpu().numpy().reshape(1, -1)
+        distances, indices = self.index.search(query_embedding, top_k)
+
+        # Retrieve results
+        results = []
+        for i, idx in enumerate(indices[0]):
+            if idx == -1:  # No valid result
+                results.append({
+                    "rank": i + 1,
+                    "content": "No content available",
+                    "score": None,
+                })
+            else:
+                metadata = self.metadata["documents"].get(str(idx), {})
                 results.append({
                     "rank": i + 1,
                     "content": metadata.get("content", "No content available"),
                     "score": distances[0][i],
                 })
-        
+
         return results
+
+
+
 
