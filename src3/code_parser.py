@@ -23,10 +23,17 @@ class CodeProcessor:
     def __init__(self, weaviate_url, gemini_model_name="gemini-1.5-flash", languages=None):
         self.client = get_weaviate_client()
         self.gemini_llm = ChatGoogleGenerativeAI(model=gemini_model_name)
-        self.tokenizer = AutoTokenizer.from_pretrained("bigcode/starcoder", token=HF_TOKEN)
+        self.tokenizer = AutoTokenizer.from_pretrained("codellama/CodeLlama-7b-hf", 
+            token=HF_TOKEN,
+            trust_remote_code=True)
         self.model = AutoModelForCausalLM.from_pretrained(
-            "bigcode/starcoder", token=HF_TOKEN, device_map="auto"
+            "codellama/CodeLlama-7b-hf", 
+            token=HF_TOKEN, device_map="auto", trust_remote_code=True
         )
+        #self.tokenizer = AutoTokenizer.from_pretrained("bigcode/starcoder", token=HF_TOKEN)
+        #self.model = AutoModelForCausalLM.from_pretrained(
+        #    "bigcode/starcoder", token=HF_TOKEN, device_map="auto"
+        #)
 
         self.parsers = {}
         self.supported_languages = languages or {
@@ -37,17 +44,17 @@ class CodeProcessor:
         self.create_schema()
 
     def build_and_load_parsers(self):
-        if not os.path.exists("build"):
-            os.mkdir("build")
-        Language.build_library(
-            "build/my-languages.so", 
-            [f"./{lang_dir}" for lang_dir in self.supported_languages.values()]
-        )
+        """Load precompiled Tree-sitter language parsers."""
+        if not os.path.exists("build/my-languages.so"):
+            raise FileNotFoundError("Precompiled 'my-languages.so' not found. Please compile it manually.")
+
+        # Load parsers
         for lang_name, lang_dir in self.supported_languages.items():
             lang = Language("build/my-languages.so", lang_name)
             parser = Parser()
             parser.set_language(lang)
             self.parsers[lang_name] = parser
+
 
     def create_schema(self):
         """
