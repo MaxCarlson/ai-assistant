@@ -166,7 +166,13 @@ class CodeProcessor:
 
     def process_repository(self, repo_path: str, language: str):
         """Process a repository and ingest code snippets with class context into Weaviate."""
+        repo_path = os.path.expanduser(repo_path)
+        if not os.path.exists(repo_path):
+            raise FileNotFoundError(f"The path {repo_path} does not exist.")
+        
         for root, _, files in os.walk(repo_path):
+            print(f"Current directory: {root}")
+            print(f"Files: {files}")
             for file in files:
                 if file.endswith(".py") or file.endswith((".cpp", ".hpp", ".h")):
                     file_path = os.path.join(root, file)
