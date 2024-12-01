@@ -14,7 +14,7 @@ def get_weaviate_client():
     """
     Initialize the Weaviate client with the latest syntax.
     """
-    client = weaviate.connect_to_local(port=8090, skip_init_checks=True)
+    client = weaviate.Client('http://localhost:8090')#weaviate.connect_to_local(port=8090, skip_init_checks=True)
     if not client.is_ready():
         raise ConnectionError("Failed to connect to Weaviate.")
     return client
@@ -45,21 +45,36 @@ class CodeProcessor:
 
     def build_and_load_parsers(self):
         """Load precompiled Tree-sitter language parsers."""
-        if not os.path.exists("build/my-languages.so"):
-            raise FileNotFoundError("Precompiled 'my-languages.so' not found. Please compile it manually.")
+        shared_library_path = "build/my-languages.so"
+        
+        # Check if the shared library exists
+        if not os.path.exists(shared_library_path):
+            raise FileNotFoundError(f"Precompiled '{shared_library_path}' not found. Please compile it manually.")
 
         # Load parsers
         for lang_name, lang_dir in self.supported_languages.items():
-            lang = Language("build/my-languages.so", lang_name)
-            parser = Parser()
-            parser.set_language(lang)
-            self.parsers[lang_name] = parser
-
+            try:
+                # Load language from shared library
+                lang = Language(shared_library_path, lang_name)
+                parser = Parser()
+                parser.set_language(lang)
+                self.parsers[lang_name] = parser
+                print(f"Successfully loaded parser for {lang_name}.")
+            except Exception as e:
+                # Provide detailed error for debugging
+                raise RuntimeError(f"Failed to load parser for {lang_name} from '{shared_library_path}'.") from e
 
     def create_schema(self):
         """
         Create the schema for the Weaviate database if it does not already exist.
         """
+        # Get the current schema
+        try:
+            existing_classes = self.client.schema.get()["classes"]
+        except AttributeError as e:
+            raise RuntimeError("Weaviate client does not support schema operations.") from e
+
+        # Define the schema
         schema = {
             "class": "CodeSnippet",
             "description": "A snippet of code from a repository",
@@ -71,12 +86,20 @@ class CodeProcessor:
                 {"name": "code", "dataType": ["text"], "description": "Raw code"},
                 {"name": "docstring", "dataType": ["text"], "description": "Generated docstring"},
                 {"name": "imports", "dataType": ["text"], "description": "Import statements"},
-                {"name": "global_variables", "dataType": ["text"], "description": "Global variables"}
+                {"name": "global_variables", "dataType": ["text"], "description": "Global variables"},
             ],
-            "vectorizer": "none"
+            "vectorizer": "none",
         }
-        if not self.client.schema.contains(schema):
+        
+        # Check if the class already exists
+        if not any(cls["class"] == schema["class"] for cls in existing_classes):
             self.client.schema.create_class(schema)
+            print(f"Schema for class '{schema['class']}' created.")
+        else:
+            print(f"Schema for class '{schema['class']}' already exists.")
+
+
+
 
     def parse_code(self, file_path: str, language: str):
         if language not in self.parsers:
@@ -225,6 +248,6 @@ class CodeProcessor:
 # Example Usage
 if __name__ == "__main__":
     processor = CodeProcessor("http://localhost:8090")
-    processor.process_repository("$HOME/projects/ai-assistant", "python")
-    processor.process_repository("$HOME/projects/Gopher", "python")
-    processor.process_repository("$HOME/projects/StuckFish", "cpp")
+    processor.process_repository("~/projects/ai-assistant", "python")
+    processor.process_repository("~/projects/Gopher", "python")
+    processor.process_repository("~/projects/StuckFish", "cpp")
