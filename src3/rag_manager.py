@@ -1,3 +1,5 @@
+import os
+from enum import Enum
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -6,16 +8,43 @@ from langchain.prompts import PromptTemplate
 from langchain.schema import SystemMessage, HumanMessage
 
 from langchain_google_genai import ChatGoogleGenerativeAI
-from settings import MAX_TOKENS
+from settings import MAX_TOKENS, EMBEDDINGS_PATH, EmbeddingType
+from obsidian_embeddings import ObsidianEmbeddings
 
+def embeddingMethod(vector_store_name: str, embedding_model_name: str):
+    def loadFAISSAllMiniLM():
+        if not os.path.exists(f"{EMBEDDINGS_PATH}/{vector_store_name}"):
+            ObsidianEmbeddings(notes_dir=EMBEDDINGS_PATH).create_vector_store(vector_store_name)
+          
+        embedding_model = HuggingFaceEmbeddings(model_name=embedding_model_name)
+        return embedding_model, FAISS.load_local(
+            vector_store_name, embedding_model, allow_dangerous_deserialization=True
+        )
+    
+    switcher = {
+        Enum('ALL_MINILM_L6_V2') : 
+        
+        
+            
+    }
+
+    return switcher.get(vector_store_name, "Saved Embedding Not Found")()
 
 class RAGManager:
-    def __init__(self):
+    def __init__(self, query_model_name: str = "gemini-1.5-flash", 
+                 embedding_model_name: str = "all-MiniLM-L6-v2",
+                 vector_store_name: str = "faiss_index"):
+        
+        self.query_model_name = query_model_name
+        self.embedding_model_name = embedding_model_name
+        self.vector_store_name = vector_store_name
+        
         # Initialize embedding model and vector store
-        self.embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-        self.vector_store = FAISS.load_local(
-            "faiss_index", self.embedding_model, allow_dangerous_deserialization=True
-        )
+        #self.embedding_model = HuggingFaceEmbeddings(model_name=self.embedding_model_name)
+        #self.vector_store = FAISS.load_local(
+        #    self.vector_store_name, self.embedding_model, allow_dangerous_deserialization=True
+        #)
+        self.embedding_model, self.vector_store = embeddingMethod(self.vector_store_name, self.embedding_model_name)
 
         # Initialize text splitter for handling long queries
         self.text_splitter = RecursiveCharacterTextSplitter(
@@ -26,7 +55,7 @@ class RAGManager:
         self.token_manager = TokenManager()
 
         # LLM for query generation
-        self.query_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
+        self.query_llm = ChatGoogleGenerativeAI(model=self.query_model_name)
 
         # Prompt for query generation
         self.query_prompt = PromptTemplate(
