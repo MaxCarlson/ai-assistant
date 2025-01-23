@@ -1,162 +1,67 @@
-import argparse
-import streamlit as st
-from embedding_manager import EmbeddingManager
-from llm_manager import LLMManager
-from rag_pipeline import RAGPipeline
+import os
+from langchain.chains import Chain
+from langchain.schema import Response
+from langchain.clients import LocalTransformersClient
+from langchain.retrieval import InMemoryRetriever
+import google.generativeai as genai
+from abc import ABC, abstractmethod
+
+# Define a custom function to handle Gemini model interactions
+def gemini_model_query(prompt, max_tokens=200):
+    # Assuming `model` and `chat_session` from your Gemini setup
+    response = chat_session.send_message(prompt, stream=True, generation_config={
+        "candidate_count": 1,
+        "max_output_tokens": max_tokens,
+        "temperature": 1.0,
+    })
+    return Response(text="".join(part.text for part in response))
+
+class ModelBase(ABC):
+    @abstractmethod
+    def generate_response(self, prompt: str) -> str:
+        pass
+
+class GeminiModelHandler(ModelBase):
+    def __init__(self, model_name="gemini-1.5-flash-8b"):
+        # Configure the API using the environment variable
+        self.api_key = os.getenv('GOOGLE_API_KEY_AI_ASSISTANT')
+        genai.configure(api_key=api_key)
+        self.model = genai.GenerativeModel(model_name)
+        self.chat_session = self.model.start_chat(history=[])
+    
+    def generate_response(self, prompt, docs: List[DocumentLoader] = None):
+        response = self.chat_session.send_message(prompt, stream=True, generation_config={
+            "candidate_count": 1,
+            "max_output_tokens": 200,
+            "temperature": 1.0,
+        })
+        return "".join(part.text for part in response)
 
 
+# Initialize the client with the custom query function
+client = LocalTransformersClient(query_fn=gemini_model_query)
 
-def initialize_components(index_path, model_name, device, top_k):
-    """
-    Initialize the main components of the app: EmbeddingManager, LLMManager, RAGPipeline.
-
-    :param index_path: Path to the FAISS index.
-    :param model_name: Name of the LLM model to use.
-    :param device: Device for inference ('cuda' or 'cpu').
-    :param top_k: Number of results to retrieve for each query.
-    :return: Initialized instances of RAGPipeline and its components.
-    """
-    # Initialize EmbeddingManager
-    embedding_manager = EmbeddingManager(model_name="all-MiniLM-L6-v2")
-    embedding_manager.load_index(index_path)
-
-    # Initialize LLMManager
-    llm_manager = LLMManager(model_name=model_name, device=device)
-
-    # Initialize RAGPipeline
-    rag_pipeline = RAGPipeline(embedding_manager, llm_manager, top_k=top_k)
-
-    return embedding_manager, llm_manager, rag_pipeline
+# Set up the LangChain with this client
+chain = Chain(client)
 
 
-def cli_mode(rag_pipeline):
-    """
-    Run the app in CLI mode.
+# Simulate a retrieval system
+retriever = InMemoryRetriever(documents={
+    "doc1": "Information about project Alpha",
+    "doc2": "Details on project Beta"
+})
 
-    :param rag_pipeline: Instance of RAGPipeline to handle queries.
-    """
-    print("\nWelcome to the AI Assistant (RAG Pipeline)")
-    print("Type 'exit' to quit.\n")
+# Update the chain to use this retriever
+chain.set_retriever(retriever)
 
+def chat_with_rag():
+    print("Chatbot with RAG is ready. Type 'quit' to exit.")
     while True:
-        query = input("Enter your query: ")
-        if query.lower() == "exit":
-            print("Goodbye!")
+        user_input = input("You: ")
+        if user_input.lower() == 'quit':
             break
-
-        try:
-            response = rag_pipeline.query(query)
-            print("\nResponse:")
-            print(response[:20000])  # Print only the first 2000 characters for long responses
-            if len(response) > 20000:
-                print("\n[Response truncated. Consider refining your query.]")
-            print("\n" + "-" * 50)
-        except Exception as e:
-            print(f"Error processing your query: {e}")
-
-
-
-def streamlit_mode(rag_pipeline):
-    """
-    Run the app in Streamlit UI mode.
-
-    :param rag_pipeline: Instance of RAGPipeline to handle queries.
-    """
-    st.title("AI Assistant - RAG Pipeline")
-    st.subheader("Retrieve context-enhanced AI responses using FAISS and LLMs.")
-
-    query = st.text_input("Enter your query:")
-    if query:
-        with st.spinner("Processing..."):
-            response = rag_pipeline.query(query)
-        st.subheader("Response:")
-        st.write(response)
-        
-def inspect_mode(embedding_manager, top_k=5):
-    """
-    Run the app in FAISS inspection mode.
-
-    :param embedding_manager: Instance of EmbeddingManager to handle queries.
-    :param top_k: Number of top results to retrieve.
-    """
-    print("\nWelcome to the FAISS Debug Tool")
-    print("Type 'exit' to quit.\n")
-
-    while True:
-        query = input("Enter your query: ")
-        if query.lower() == "exit":
-            print("Exiting FAISS Debug Tool.")
-            break
-
-        try:
-            results = embedding_manager.debug_query(query, top_k=top_k)
-            if not results:
-                print("\nNo relevant results found.")
-            else:
-                print("\nRetrieved Results:")
-                for result in results:
-                    print(f"Rank: {result['rank']}")
-                    print(f"Score: {result['score']:.4f}")
-                    print(f"Content: {result['content']}\n")
-        except Exception as e:
-            print(f"Error processing your query: {e}")
-
-
-
-def main():
-    """
-    Main entry point for the app. Handles argument parsing and mode selection.
-    """
-    parser = argparse.ArgumentParser(description="AI Assistant with RAG Pipeline")
-    parser.add_argument(
-        "--index_path",
-        type=str,
-        default="data/embeddings/ChatGPT_index.faiss",
-        help="Path to the FAISS index file.",
-    )
-    parser.add_argument(
-        "--model_name",
-        type=str,
-        default="EleutherAI/gpt-neo-1.3B",
-        help="Name of the Hugging Face model to use.",
-    )
-    parser.add_argument(
-        "--device",
-        type=str,
-        default="cuda",
-        help="Device to use for inference ('cuda' or 'cpu').",
-    )
-    parser.add_argument(
-        "--top_k",
-        type=int,
-        default=5,
-        help="Number of top results to retrieve for each query.",
-    )
-    parser.add_argument(
-        "--mode",
-        type=str,
-        default="cli",
-        choices=["cli", "streamlit", "inspect"],
-        help="Mode to run the app ('cli', 'streamlit', 'inspect').",
-    )
-    args = parser.parse_args()
-
-    # Initialize components
-    embedding_manager, llm_manager, rag_pipeline = initialize_components(
-        index_path=args.index_path,
-        model_name=args.model_name,
-        device=args.device,
-        top_k=args.top_k,
-    )
-
-    # Choose mode
-    if args.mode == "cli":
-        cli_mode(rag_pipeline)
-    elif args.mode == "streamlit":
-        streamlit_mode(rag_pipeline)
-    elif args.mode == "inspect":
-        inspect_mode(embedding_manager, args.top_k)
-
+        response = chain.query(user_input)
+        print("Bot:", response.text)
 
 if __name__ == "__main__":
-    main()
+    chat_with_rag()
