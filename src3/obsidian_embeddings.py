@@ -4,7 +4,7 @@ from langchain.schema import Document
 from langchain_community.vectorstores import FAISS
 from alive_progress import alive_bar
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_googlevertexai import GoogleVertexEmbeddings
+#from langchain_googlevertexai import GoogleVertexEmbeddings
 
 class ObsidianEmbeddings:
     def __init__(self, notes_dir, chunk_size=1000, chunk_overlap=50):

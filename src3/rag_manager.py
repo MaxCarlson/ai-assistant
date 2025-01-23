@@ -6,45 +6,58 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from token_manager import TokenManager
 from langchain.prompts import PromptTemplate
 from langchain.schema import SystemMessage, HumanMessage
+from typing import Callable
 
 from langchain_google_genai import ChatGoogleGenerativeAI
-from settings import MAX_TOKENS, EMBEDDINGS_PATH, EmbeddingType
+from settings import MAX_TOKENS, EMBEDDINGS_PATH, EmbeddingModel, NOTES_SRC_PATH
 from obsidian_embeddings import ObsidianEmbeddings
 
+# Embedding Method Loader
 def embeddingMethod(vector_store_name: str, embedding_model_name: str):
+    # Define embedding methods
     def loadFAISSAllMiniLM():
+        # Create vector store if it does not exist
         if not os.path.exists(f"{EMBEDDINGS_PATH}/{vector_store_name}"):
-            ObsidianEmbeddings(notes_dir=EMBEDDINGS_PATH).create_vector_store(vector_store_name)
-          
+            ObsidianEmbeddings(notes_dir=NOTES_SRC_PATH).create_vector_store(vector_store_name)
+        
+        # Load embedding model and vector store
         embedding_model = HuggingFaceEmbeddings(model_name=embedding_model_name)
         return embedding_model, FAISS.load_local(
             vector_store_name, embedding_model, allow_dangerous_deserialization=True
         )
     
+    # Switcher dictionary for embedding methods
     switcher = {
-        Enum('ALL_MINILM_L6_V2') : 
-        
-        
-            
+        "faiss_index": loadFAISSAllMiniLM,
+        EmbeddingModel.ALL_MINILM_L6_V2: loadFAISSAllMiniLM,
+        # Add additional methods here for other embedding types if necessary
     }
+    
+    # Retrieve the embedding method based on the enum
+    #embedding_type = EmbeddingModel(vector_store_name)  # Converts the string to an enum if valid
+    embedding_loader: Callable = switcher.get(vector_store_name)
 
-    return switcher.get(vector_store_name, "Saved Embedding Not Found")()
+    if embedding_loader is None:
+        raise ValueError(f"Embedding type '{vector_store_name}' not supported or invalid.")
+
+    return embedding_loader()  # Execute the appropriate method
+
 
 class RAGManager:
     def __init__(self, query_model_name: str = "gemini-1.5-flash", 
                  embedding_model_name: str = "all-MiniLM-L6-v2",
-                 vector_store_name: str = "faiss_index"):
+                 notes_vector_store_name: str = "faiss_index"):
         
         self.query_model_name = query_model_name
         self.embedding_model_name = embedding_model_name
-        self.vector_store_name = vector_store_name
+        self.notes_vector_store_name = notes_vector_store_name
         
         # Initialize embedding model and vector store
         #self.embedding_model = HuggingFaceEmbeddings(model_name=self.embedding_model_name)
         #self.vector_store = FAISS.load_local(
-        #    self.vector_store_name, self.embedding_model, allow_dangerous_deserialization=True
+        #    self.notes_vector_store_name, self.embedding_model, allow_dangerous_deserialization=True
         #)
-        self.embedding_model, self.vector_store = embeddingMethod(self.vector_store_name, self.embedding_model_name)
+        self.embedding_model, self.vector_store = embeddingMethod(self.notes_vector_store_name, self.embedding_model_name)
 
         # Initialize text splitter for handling long queries
         self.text_splitter = RecursiveCharacterTextSplitter(
@@ -108,15 +121,11 @@ class RAGManager:
         docs = self.vector_store.similarity_search(query, k=k)
         return "\n".join([doc.page_content for doc in docs])
 
-    def get_context(
-        self, user_input: str, conversation_history: list, k: int = 5
-    ) -> str:
+
+    def get_context(self, user_input: str, conversation_history: list, k: int = 5) -> str:
         """Retrieve context using multiple queries if necessary."""
         # Generate queries
         queries = self.generate_queries(user_input, conversation_history)
-
-        # TODO: There are many queries returned where multiple lines aren't techinally blank,
-        # but are blank for all intents and purposes. We should filter these out when they occur.
 
         # Retrieve context for each query and combine
         all_docs = []
@@ -125,8 +134,15 @@ class RAGManager:
                 self.vector_store.similarity_search(query, k=max(1, k // len(queries)))
             )
 
-        # Combine and limit the retrieved context
+        # Combine retrieved documents
         combined_context = "\n".join([doc.page_content for doc in all_docs[:k]])
+
+        # Trim to token limit before embedding
+        max_token_limit = 1024  # Model limit
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=max_token_limit, chunk_overlap=100)
+        trimmed_context = text_splitter.split_text(combined_context)[0]  # Take only the first chunk
+
         return self.token_manager.trim_to_token_limit(
-            combined_context, max_tokens=int(MAX_TOKENS * 0.35)
+            trimmed_context, max_tokens=int(MAX_TOKENS * 0.35)
         )
+
