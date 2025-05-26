@@ -2,12 +2,14 @@ from rich.console import Console
 from rich.syntax import Syntax
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.prompt import Prompt
 import re
 import pyperclip
+import keyboard  # Requires `pip install keyboard`
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
-from rag_manager import RAGManager  # Import correctly
+from rag_manager import RAGManager
 from settings import MAX_TOKENS
 from token_manager import TokenManager
 
@@ -16,21 +18,32 @@ console = Console()
 
 # Initialize LLM, RAG, and Token Managers
 llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro")
-rag_manager = RAGManager("gemini-1.5-pro", "all-MiniLM-L6-v2")  # <-- Ensure this is initialized
+rag_manager = RAGManager("gemini-1.5-pro", "all-MiniLM-L6-v2")
 token_manager = TokenManager()
 
 # Global variables
 conversation_history = []
 system_template = "You are an AI assistant. Use the following context to help answer the user's query:\n{context}\n"
+last_code_block = None  # Stores the last generated code block
+
+
+def copy_last_code():
+    """Copies the last detected code block to the clipboard."""
+    global last_code_block
+    if last_code_block:
+        pyperclip.copy(last_code_block)
+        console.print("[green]✅ Code copied to clipboard![/green]")
+    else:
+        console.print("[yellow]⚠️ No code to copy![/yellow]")
+
 
 def format_response(response_text):
     """
     Processes the AI response, detecting and formatting Markdown and code blocks properly.
     - Highlights Python, JSON, Bash, Markdown, etc.
     - Displays Markdown properly.
-    - Allows copying code blocks using [c] shortcut.
+    - Adds a [c] button to copy code blocks.
     """
-
     global last_code_block
 
     # Regex pattern to detect fenced code blocks
@@ -64,16 +77,20 @@ def format_response(response_text):
 
 
 def chat():
-    global conversation_history  # Ensure conversation history is recognized
+    """Handles the interactive AI chat session."""
+    global conversation_history
 
     console.print("[bold green]Interactive AI Assistant (Type 'exit' to quit)[/bold green]", justify="center")
-    
+
     if conversation_history is None:
         conversation_history = []  # Ensure initialization
 
+    # Monitor for copy key (runs in background)
+    keyboard.add_hotkey("c", copy_last_code)
+
     while True:
         try:
-            user_input = input("\n[bold cyan]You:[/bold cyan] ")
+            user_input = console.input("\n[bold cyan]You:[/bold cyan] ").strip()
             if user_input.lower() in ["exit", "quit"]:
                 console.print("[bold red]Exiting AI Assistant...[/bold red]")
                 break
@@ -112,6 +129,6 @@ def chat():
             console.print("\n[bold red]Interrupted. Exiting...[/bold red]")
             break
 
+
 if __name__ == "__main__":
     chat()
-
