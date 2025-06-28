@@ -6,7 +6,6 @@ import requests
 import json
 from pathlib import Path
 from typing import Callable, Dict, List
-
 from src import workspace_manager
 
 # --- Tool Implementations ---
@@ -57,33 +56,24 @@ def web_search(query: str, num_results: int = 5) -> str:
     """
     url = "https://html.duckduckgo.com/html/"
     params = {"q": query}
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
         response = requests.post(url, data=params, headers=headers, timeout=10)
         response.raise_for_status()
-
-        # Simple regex to parse the HTML results
         results = re.findall(r'a class="result__a" href="([^"]+)">(.*?)</a>.*?<a class="result__snippet".*?>(.*?)</a>', response.text, re.DOTALL)
-        
-        if not results:
-            return "No results found."
-
-        output = []
-        for i, (link, title, snippet) in enumerate(results):
-            if i >= num_results:
-                break
-            output.append({
-                "title": re.sub('<.*?>', '', title), # Strip HTML tags from title
-                "href": link,
-                "body": re.sub('<.*?>', '', snippet) # Strip HTML tags from snippet
-            })
-        
+        if not results: return "No results found."
+        output = [{"title": re.sub('<.*?>', '', t), "href": h, "body": re.sub('<.*?>', '', s)} for h, t, s in results[:num_results]]
         return json.dumps(output, indent=2)
-
     except Exception as e:
         return f"Error performing web search: {e}"
+
+def request_user_input(task_id: str, question: str) -> str:
+    """
+    Pauses the task and asks the user for input. The user will respond with a separate command.
+    :param task_id: The ID of the current task.
+    :param question: The question to ask the user.
+    """
+    return f"Task paused. User was asked: {question}"
 
 def task_complete(task_id: str, reason: str) -> str:
     """
@@ -93,11 +83,14 @@ def task_complete(task_id: str, reason: str) -> str:
     """
     return f"Task marked as complete by the agent. Reason: {reason}"
 
+# --- Tool Registry ---
+
 TOOLS: Dict[str, Callable] = {
     "write_file": write_file,
     "execute_python_code": execute_python_code,
     "run_pytest": run_pytest,
     "web_search": web_search,
+    "request_user_input": request_user_input,
     "task_complete": task_complete,
 }
 

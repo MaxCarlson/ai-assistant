@@ -33,5 +33,35 @@
       "web_search",
       "task_complete"
     ]
+  },
+  "1": {
+    "id": "1",
+    "goal": "write a ytdlp downloader that runs ytdlp on dofferent fikes full of urls and outputs the d9wnloaded file into a folder named after the uro file",
+    "history": [],
+    "status": "pending",
+    "max_steps": 15,
+    "allowed_tools": [
+      "write_file",
+      "execute_python_code",
+      "run_pytest",
+      "web_search",
+      "request_user_input",
+      "task_complete"
+    ]
+  },
+  "2": {
+    "id": "2",
+    "goal": "write a prome number finder with unit tests",
+    "history": [],
+    "status": "pending",
+    "max_steps": 15,
+    "allowed_tools": [
+      "write_file",
+      "execute_python_code",
+      "run_pytest",
+      "web_search",
+      "request_user_input",
+      "task_complete"
+    ]
   }
 }

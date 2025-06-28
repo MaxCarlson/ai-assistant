@@ -9,7 +9,7 @@ from rich.syntax import Syntax
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
 from src import task_manager
-from src.tui import TUI
+from src.tui_app import TUI # Corrected Import
 
 console = Console()
 last_code_block = None
@@ -91,14 +91,13 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
                     continue
                 if user_input.lower() == "/help":
                     console.print("[bold]Available Commands:[/bold]")
-                    console.print("  /exit, /quit        - Exit the application.")
-                    console.print("  /copy               - Copy the last code block.")
-                    console.print("  /clear              - Clear the conversation history.")
-                    console.print("  /task_create <goal> - Create a new agent task.")
-                    console.print("  /task_start <id>    - Start a created task (e.g., /task_start 0).")
-                    console.print("  /do <goal>          - Create and immediately start a new agent task.")
-                    console.print("  /task_list          - List all tasks and their status.")
-                    console.print("  /tasks              - Open the interactive task viewer TUI.")
+                    console.print("  /exit, /quit             - Exit the application.")
+                    console.print("  /copy                    - Copy the last code block.")
+                    console.print("  /clear                   - Clear the conversation history.")
+                    console.print("  /tasks                   - Open the interactive task viewer TUI.")
+                    console.print("  /task_list               - List all tasks and their status.")
+                    console.print("  /do <goal>               - Create and immediately start a new agent task.")
+                    console.print("  /provide_input <id> <text> - Provide input to a paused task.")
                     continue
 
                 if user_input.lower() == "/tasks":
@@ -114,17 +113,22 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
                     task_thread.start()
                     continue
                 
-                if user_input.lower().startswith("/task_create "):
-                    goal = user_input[len("/task_create "):].strip()
-                    task_id = task_manager.create_task(goal)
-                    console.print(f"[green]✅ Task '{task_id}' created with goal: {goal}[/green]")
+                if user_input.lower().startswith("/provide_input "):
+                    parts = user_input.split(" ", 2)
+                    if len(parts) < 3:
+                        console.print("[red]Usage: /provide_input <task_id> <your_input_text>[/red]")
+                        continue
+                    task_id, user_response = parts[1], parts[2]
+                    task = task_manager.get_task(task_id)
+                    if task and task['status'] == 'pending_input':
+                        task_manager.log_to_task(task_id, f"User Input: {user_response}")
+                        console.print(f"[yellow]🚀 Resuming task '{task_id}' with your input...[/yellow]")
+                        task_thread = threading.Thread(target=agent_manager.start_task, args=(task_id, notification_queue))
+                        task_thread.start()
+                    else:
+                        console.print(f"[red]Error: Task {task_id} not found or not awaiting input.[/red]")
                     continue
-                if user_input.lower().startswith("/task_start "):
-                    task_id = user_input[len("/task_start "):].strip().strip("'\"")
-                    console.print(f"[yellow]🚀 Starting task '{task_id}' in background...[/yellow]")
-                    task_thread = threading.Thread(target=agent_manager.start_task, args=(task_id, notification_queue))
-                    task_thread.start()
-                    continue
+
                 if user_input.lower() == "/task_list":
                     console.print("[bold]Tasks:[/bold]")
                     tasks = task_manager.get_all_tasks()

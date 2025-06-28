@@ -1,5 +1,4 @@
 import json
-import uuid
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -17,8 +16,9 @@ def _save_tasks(tasks: Dict[str, Any]):
     with open(TASKS_FILE, 'w') as f:
         json.dump(tasks, f, indent=2)
 
-def create_task(goal: str, allowed_tools: Optional[List[str]] = None) -> str:
+def create_task(goal: str, max_steps: int = 15, allowed_tools: Optional[List[str]] = None) -> str:
     """Creates a new task and saves it to disk."""
+    from src.tool_manager import TOOLS # Local import to avoid circular dependency
     tasks = _load_tasks()
     task_id = str(len(tasks))
     tasks[task_id] = {
@@ -26,7 +26,8 @@ def create_task(goal: str, allowed_tools: Optional[List[str]] = None) -> str:
         "goal": goal,
         "history": [],
         "status": "pending",
-        "allowed_tools": allowed_tools or ["write_file", "execute_python_code", "run_pytest", "web_search", "task_complete"]
+        "max_steps": max_steps, # Added this field
+        "allowed_tools": allowed_tools or list(TOOLS.keys())
     }
     _save_tasks(tasks)
     return task_id
