@@ -1,0 +1,142 @@
+import uuid
+import json
+import requests
+import os
+import re
+from typing import Dict, Any
+from src import workspace_manager, tool_manager
+
+class AgentManager:
+    def __init__(self, model_name="gemini-1.5-pro"):
+        self.tasks: Dict[str, Dict[str, Any]] = {}
+        self.task_counter = 0
+        self.tool_descriptions = tool_manager.get_tool_descriptions()
+        self.system_prompt_template = self._load_system_prompt()
+        
+        self.model_name = model_name
+        self.api_key = os.getenv('GOOGLE_API_KEY_AI_ASSISTANT')
+        if not self.api_key:
+            raise ValueError("GOOGLE_API_KEY_AI_ASSISTANT environment variable not set.")
+        self.api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={self.api_key}"
+
+    def _load_system_prompt(self) -> str:
+        thought_process = """
+**Your Thought Process:**
+1.  **Analyze the Goal:** Understand what needs to be done.
+2.  **Choose a Tool:** Select the best tool for the next logical step.
+3.  **Provide Arguments:** Format the arguments for the chosen tool as a JSON object.
+4.  **Respond:** Your response MUST be a single JSON object with two keys: "thought" and "tool_call".
+    - "thought": A brief explanation of your reasoning for this step.
+    - "tool_call": A dictionary with "name" and "args" for the tool you want to use. The "args" MUST include the "task_id".
+"""
+        example_json = """
+**Example Response Format:**
+```json
+{
+    "thought": "I need to create a Python file to start working on the problem.",
+    "tool_call": {
+        "name": "write_file",
+        "args": {
+            "task_id": "CURRENT_TASK_ID",
+            "file_path": "main.py",
+            "content": "print('Hello, World!')"
+        }
+    }
+}
+```"""
+        prompt_parts = [
+            "You are an autonomous AI agent responsible for completing a given task.",
+            "You will be given a high-level goal. Your job is to break it down into steps and use the available tools to accomplish it.",
+            "**Your Goal:**\n{{goal}}",
+            "**Available Tools:**", self.tool_descriptions,
+            thought_process.strip(),
+            example_json.strip(),
+            "**Conversation History (Previous Steps):**\n{{history}}",
+            "\nNow, begin. What is your first step?"
+        ]
+        return "\n\n".join(prompt_parts)
+
+    def create_task(self, goal: str) -> str:
+        task_id = str(self.task_counter)
+        self.task_counter += 1
+        workspace_manager.create_workspace(task_id)
+        self.tasks[task_id] = {"goal": goal, "history": [], "status": "pending"}
+        return task_id
+
+    def start_task(self, task_id: str, max_steps: int = 10):
+        if task_id not in self.tasks:
+            return f"Error: Task with ID '{task_id}' not found."
+
+        task = self.tasks[task_id]
+        task["status"] = "in_progress"
+        
+        for step in range(max_steps):
+            print(f"\n--- Task {task_id} | Step {step+1}/{max_steps} ---")
+            
+            history_str = "\n".join(task["history"])
+            prompt_text = self.system_prompt_template.format(
+                goal=task["goal"],
+                history=history_str,
+            ).replace("CURRENT_TASK_ID", task_id)
+            
+            payload = {"contents": [{"parts": [{"text": prompt_text}]}]}
+            try:
+                response = requests.post(self.api_url, json=payload, timeout=120)
+                response.raise_for_status()
+                data = response.json()
+                response_content = data['candidates'][0]['content']['parts'][0]['text']
+            except Exception as e:
+                error_msg = f"API Error: {e}"
+                print(error_msg)
+                task["history"].append(f"Step {step+1} Error: {error_msg}")
+                continue
+
+            task["history"].append(f"Step {step+1} AI Response: {response_content}")
+            
+            try:
+                # Fixed: More robust JSON extraction logic
+                json_str = None
+                # 1. Try to find JSON within markdown fences
+                fence_match = re.search(r'```json\s*(\{.*?\})\s*```', response_content, re.DOTALL)
+                if fence_match:
+                    json_str = fence_match.group(1)
+                else:
+                    # 2. If not found, find the first '{' and last '}'
+                    start_index = response_content.find('{')
+                    end_index = response_content.rfind('}')
+                    if start_index != -1 and end_index != -1 and end_index > start_index:
+                        json_str = response_content[start_index:end_index+1]
+
+                if json_str is None:
+                    raise json.JSONDecodeError("Could not find a JSON object in the AI's response.", response_content, 0)
+
+                action_json = json.loads(json_str)
+                thought = action_json.get("thought", "No thought provided.")
+                tool_call = action_json.get("tool_call")
+                
+                print(f"AI Thought: {thought}")
+
+                if tool_call and tool_call.get("name") in tool_manager.TOOLS:
+                    tool_name = tool_call["name"]
+                    tool_args = tool_call.get("args", {})
+                    
+                    print(f"Executing Tool: {tool_name} with args: {tool_args}")
+                    tool_function = tool_manager.TOOLS[tool_name]
+                    result = tool_function(**tool_args)
+                    print(f"Tool Result: {result}")
+                    task["history"].append(f"Step {step+1} Tool Result: {result}")
+                else:
+                    task["history"].append("Step {step+1} Error: Invalid or missing tool call.")
+                    print("Error: Invalid or missing tool call in AI response.")
+
+            except Exception as e:
+                import traceback
+                error_msg = f"An unexpected error occurred while processing the AI response: {e}"
+                print(error_msg)
+                print(f"--- FAULTY AI RESPONSE ---\n{response_content}\n--- END OF RESPONSE ---")
+                traceback.print_exc()
+                task["history"].append(f"Step {step+1} Error: {error_msg}")
+
+        task["status"] = "completed"
+        workspace_manager.cleanup_workspace(task_id)
+        return f"Task {task_id} finished after {max_steps} steps and workspace has been cleaned up."
