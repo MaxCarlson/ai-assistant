@@ -35,44 +35,56 @@ class AgentManager:
     def _get_system_prompt(self, goal: str, history: str, allowed_tools: List[str]) -> str:
         """Builds the system prompt dynamically based on the allowed tools."""
         tool_descriptions = tool_manager.get_tool_descriptions(allowed_tools)
-        hello_world_base64 = "cHJpbnQoJ0hlbGxvLCBXb3JsZCEnKQ=="
         
         prompt_parts = [
-            "You are an autonomous AI agent...",
-            f"**Your Goal:**\n{goal}",
+            "You are an autonomous AI agent. Your primary goal is to solve the user's request by using a set of tools.",
+            "**Your Goal:**", goal,
+            "**Your Thought Process:**",
+            "1.  Analyze the user's goal.",
+            "2.  If the goal is ambiguous or you need more information, you MUST use the `request_user_input` tool immediately. Do not attempt to proceed without clarification.",
+            "3.  If the goal is clear, formulate a plan and select the best tool to execute the first step.",
+            "4.  Observe the result of the tool execution.",
+            "5.  Based on the result, decide on the next step, which could be using another tool, or marking the task as complete with `task_complete`.",
             "**Available Tools:**", tool_descriptions,
-            "**Your Thought Process:**...",
+            "**Response Format:**",
+            "You MUST respond with a single JSON object enclosed in ```json ... ```.",
+            "The JSON object must contain your 'thought' and the 'tool_call' you want to make. If you are only thinking or waiting, `tool_call` can be `null`.",
             f"""**Example Response Format:**
 ```json
 {{
-    "thought": "I need to create a Python file. I will encode its content in Base64.",
+    "thought": "I need to ask the user for the filename.",
     "tool_call": {{
-        "name": "write_file",
+        "name": "request_user_input",
         "args": {{
             "task_id": "CURRENT_TASK_ID",
-            "file_path": "main.py",
-            "content_base64": "{hello_world_base64}"
+            "question": "What should I name the output file?"
         }}
     }}
 }}
 ```""",
             f"**Conversation History (Previous Steps):**\n{history}",
-            "\nNow, begin. What is your first step?"
+            "\nNow, begin. What is your next step?"
         ]
         return "\n\n".join(prompt_parts)
 
-    def start_task(self, task_id: str, notification_queue: Queue):
+    def start_task(self, task_id: str, notification_queue: Optional[Queue] = None):
         task = task_manager.get_task(task_id)
         if not task:
-            notification_queue.put(f"[Agent Error] Task with ID '{task_id}' not found.")
+            if notification_queue:
+                notification_queue.put(f"[Agent Error] Task with ID '{task_id}' not found.")
+            else:
+                print(f"[Agent Error] Task with ID '{task_id}' not found.")
             return
 
         task_manager.update_task_status(task_id, "in_progress")
         
         def notify(message: str):
-            notification_queue.put(f"[Task {task_id}] {message}")
+            if notification_queue:
+                notification_queue.put(f"[Task {task_id}] {message}")
+            else:
+                print(f"[Task {task_id}] {message}")
 
-        max_steps = 15
+        max_steps = task.get("max_steps", 15)
         try:
             for step in range(max_steps):
                 notify(f"--- Step {step+1}/{max_steps} ---")
@@ -115,16 +127,24 @@ class AgentManager:
                         tool_args = tool_call.get("args", {})
                         if 'task_id' not in tool_args:
                             tool_args['task_id'] = task_id
-                            
+                        
+                        # The agent manager handles state changes based on the tool call
+                        if tool_name == 'request_user_input':
+                            task_manager.update_task_status(task_id, 'pending_input')
+                        
                         result = tool_manager.TOOLS[tool_name](**tool_args)
                         notify(f"Tool Result: {result}")
                         task_manager.log_to_task(task_id, f"Tool Result: {result}")
 
+                        # The agent manager stops the loop based on the tool call
                         if tool_name == 'task_complete':
                             task_manager.update_task_status(task_id, "completed_by_agent")
                             break
+                        if tool_name == 'request_user_input':
+                            notify("Task paused, waiting for user input.")
+                            break
                     else:
-                        error_msg = "Error: Invalid or disallowed tool call."
+                        error_msg = "Error: Invalid or disallowed tool call. The agent might be stuck in a loop if it cannot select a tool."
                         notify(error_msg)
                         task_manager.log_to_task(task_id, error_msg)
 
@@ -146,4 +166,5 @@ class AgentManager:
         
         finally:
             workspace_manager.cleanup_workspace(task_id)
-            notification_queue.put(f"✅ Task {task_id} finished with status: {task_manager.get_task(task_id)['status']}. Workspace cleaned up.")
+            final_status = task_manager.get_task(task_id)['status']
+            notify(f"✅ Task {task_id} finished with status: {final_status}. Workspace cleaned up.")

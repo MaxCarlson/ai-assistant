@@ -1,6 +1,6 @@
 from transformers import AutoTokenizer
 
-class TokenManager:
+class FullTokenManager:
     def __init__(self):
         # Initialize the tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained("gpt2")
@@ -17,29 +17,33 @@ class TokenManager:
         return text
 
     def limit_tokens(self, user_input: str, conversation_history: list, context: str, max_tokens: int, percent_context: float) -> tuple:
-        """Limit tokens for conversation history and context."""
+        """Limit tokens for conversation history and context, removing oldest history first."""
         user_input_tokens = self.count_tokens(user_input)
         context_limit = int(max_tokens * percent_context)
-        available_tokens = max_tokens - user_input_tokens
-
-        # Estimate tokens for conversation history and context
-        history_tokens = sum(self.count_tokens(entry["content"]) for entry in conversation_history)
-        context_tokens = self.count_tokens(context)
-
+        
         # Trim context if it exceeds its cap
-        if context_tokens > context_limit:
+        if self.count_tokens(context) > context_limit:
             context = self.trim_to_token_limit(context, context_limit)
-
-        # Trim conversation history if combined exceeds available tokens
-        if history_tokens + context_tokens > available_tokens:
-            excess_tokens = history_tokens + context_tokens - available_tokens
+        
+        context_tokens = self.count_tokens(context)
+        
+        # Calculate remaining tokens for history
+        history_token_limit = max_tokens - user_input_tokens - context_tokens
+        
+        # Trim history if it exceeds its limit, removing from the beginning (oldest)
+        history_tokens = sum(self.count_tokens(entry["content"]) for entry in conversation_history)
+        
+        if history_tokens > history_token_limit:
             trimmed_history = []
+            current_tokens = 0
+            # Iterate from newest to oldest, adding to new list until limit is reached
             for entry in reversed(conversation_history):
-                tokens = self.count_tokens(entry["content"])
-                if tokens <= excess_tokens:
-                    excess_tokens -= tokens
-                else:
+                entry_tokens = self.count_tokens(entry["content"])
+                if current_tokens + entry_tokens <= history_token_limit:
                     trimmed_history.insert(0, entry)
+                    current_tokens += entry_tokens
+                else:
+                    break # Stop when history is full
             conversation_history = trimmed_history
 
         return conversation_history, context

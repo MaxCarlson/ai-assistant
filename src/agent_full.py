@@ -1,7 +1,7 @@
 from src.base_agent import BaseAgent
 from src.settings import MAX_TOKENS
 from src.rag_manager import RAGManager
-from src.token_manager_full import FullTokenManager
+from src.token_manager import FullTokenManager # Corrected import name
 
 class RAGAgent(BaseAgent):
     """

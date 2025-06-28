@@ -9,7 +9,8 @@ from rich.syntax import Syntax
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
 from src import task_manager
-from src.tui_app import TUI # Corrected Import
+# The TUI import is removed to decouple the chat UI from the TUI application
+# from src.tui_app import TUI
 
 console = Console()
 last_code_block = None
@@ -94,15 +95,16 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
                     console.print("  /exit, /quit             - Exit the application.")
                     console.print("  /copy                    - Copy the last code block.")
                     console.print("  /clear                   - Clear the conversation history.")
-                    console.print("  /tasks                   - Open the interactive task viewer TUI.")
+                    console.print("  /tasks                   - Instructions to open the interactive task viewer TUI.")
                     console.print("  /task_list               - List all tasks and their status.")
                     console.print("  /do <goal>               - Create and immediately start a new agent task.")
                     console.print("  /provide_input <id> <text> - Provide input to a paused task.")
                     continue
 
                 if user_input.lower() == "/tasks":
-                    TUI().run()
-                    console.print("[yellow]TUI closed. Returning to chat.[/yellow]")
+                    # Fixed: Instruct the user instead of trying to run the TUI from here.
+                    console.print("\n[bold yellow]To open the Task Manager TUI, please exit the chat and run:[/bold yellow]")
+                    console.print("  [cyan]python src/cli.py view[/cyan]\n")
                     continue
 
                 if user_input.lower().startswith("/do "):

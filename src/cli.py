@@ -2,7 +2,8 @@ import argparse
 import sys
 import threading
 from pathlib import Path
-from src import task_manager, agent_manager, tui
+from src import task_manager, agent_manager
+from src.tui_app import TUI # Corrected: Import the TUI class directly
 
 def handle_do(args):
     """Handles the 'do' command."""
@@ -38,7 +39,7 @@ def handle_list(args):
 
 def handle_view(args):
     """Handles the 'view' command by launching the TUI."""
-    app = tui.TUI()
+    app = TUI() # Corrected: Instantiate the class directly
     app.run()
 
 def main():

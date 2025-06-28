@@ -37,11 +37,11 @@ class AddTaskScreen(ModalScreen):
                 cb.label.plain for cb in self.query(Checkbox) if cb.value
             ]
             
-            task_manager.create_task(
+            task_id = task_manager.create_task(
                 goal=goal,
                 max_steps=max_steps,
                 allowed_tools=allowed_tools
             )
-            self.dismiss(True) # Dismiss the modal and signal that a task was created
+            self.dismiss(task_id) # Dismiss the modal and return the new task_id
         else:
-            self.dismiss(False) # Just dismiss the modal
+            self.dismiss(None) # Just dismiss the modal
