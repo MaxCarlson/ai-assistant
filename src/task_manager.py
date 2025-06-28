@@ -31,8 +31,8 @@ def create_task(
     goal: str, 
     max_steps: int = 15, 
     allowed_tools: Optional[List[str]] = None,
-    context_paths: Optional[List[str]] = None,
-    read_only_paths: Optional[List[str]] = None
+    workspace_path: str = ".",
+    create_branch: bool = True
 ) -> str:
     """Creates a new task and saves it to disk."""
     tasks = _load_tasks()
@@ -54,8 +54,8 @@ def create_task(
         "status": "pending",
         "max_steps": max_steps,
         "allowed_tools": list(final_tools),
-        "context_paths": context_paths or [],
-        "read_only_paths": read_only_paths or [],
+        "workspace_path": workspace_path,
+        "create_branch": create_branch,
     }
     _save_tasks(tasks)
     return task_id

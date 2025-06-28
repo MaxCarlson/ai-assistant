@@ -4,17 +4,13 @@ import requests
 import os
 import re
 import inspect
-import difflib
-from pathlib import Path
+import subprocess
 from typing import Dict, Any, Optional, List
 from queue import Queue
 from src import workspace_manager, tool_manager, task_manager
 
 def _extract_json_from_response(text: str) -> Optional[str]:
-    """
-    Robustly extracts a JSON string from the AI's response.
-    This is now a module-level function for easier testing.
-    """
+    """Robustly extracts a JSON string from the AI's response."""
     fence_match = re.search(r'```json\s*(\{.*?\})\s*```', text, re.DOTALL)
     if fence_match:
         return fence_match.group(1).strip()
@@ -35,26 +31,15 @@ class AgentManager:
             raise ValueError("GOOGLE_API_KEY_AI_ASSISTANT environment variable not set.")
         self.api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={self.api_key}"
 
-    def _get_system_prompt(self, goal: str, history: str, allowed_tools: List[str], context_summary: str) -> str:
-        """Builds the system prompt dynamically based on the allowed tools and context."""
+    def _get_system_prompt(self, goal: str, history: str, allowed_tools: List[str]) -> str:
+        """Builds the system prompt dynamically based on the allowed tools."""
         tool_descriptions = tool_manager.get_tool_descriptions(allowed_tools)
         
         prompt_parts = [
-            "You are an expert-level autonomous software engineer agent. Your goal is to solve the user's request by writing and modifying code.",
+            "You are an expert-level autonomous software engineer agent. Your goal is to solve the user's request by writing and modifying code within a git repository.",
             "**Your Goal:**", goal,
-        ]
-
-        if context_summary:
-            prompt_parts.extend([
-                "**Context Files Provided by User:**",
-                "---",
-                context_summary,
-                "---"
-            ])
-
-        prompt_parts.extend([
             "**Your Thought Process & Self-Correction:**",
-            "1.  Analyze the user's goal and the provided context files.",
+            "1.  You are working inside a git repository. You do not need to clone it. You can read any file.",
             "2.  If the goal is ambiguous, you MUST use `request_user_input` immediately.",
             "3.  **CRITICAL:** If a tool returns an error, first use `read_file` to inspect the code. Then, for small corrections (like fixing a typo or one line of code), you MUST use the `modify_file` tool. Only use `write_file` to create a new file or if the file requires a complete rewrite.",
             "4.  **Pytest Note:** If you get a `ModuleNotFoundError` when running `run_pytest`, do not try to create `__init__.py` files. The tool handles the `PYTHONPATH` automatically. The error means your `import` statement is wrong in the test file. Use `read_file` and `modify_file` to fix the import.",
@@ -69,68 +54,33 @@ class AgentManager:
     "tool_call": {{
         "name": "write_file",
         "args": {{
-            "task_id": "CURRENT_TASK_ID",
-            "file_path": "hello.py",
-            "content": "def main():\\n    print('Hello, World!')\\n\\nif __name__ == '__main__':\\n    main()"
+            "file_path": "src/new_feature.py",
+            "content": "def new_main():\\n    print('This is a new feature!')"
         }}
     }}
 }}
 ```""",
             f"**Conversation History (Previous Steps):**\n{history}",
             "\nNow, begin. What is your next step?"
-        ])
+        ]
         return "\n\n".join(prompt_parts)
 
-    def _ingest_context(self, task_id: str) -> str:
-        """Reads context files and returns a summary string for the prompt."""
-        task = task_manager.get_task(task_id)
-        context_paths = task.get("context_paths", [])
-        if not context_paths:
-            return ""
-
-        summary_parts = []
-        for path_str in context_paths:
-            path = Path(path_str).expanduser().resolve()
-            if path.is_file():
-                try:
-                    content = path.read_text(encoding='utf-8')
-                    summary_parts.append(f"### File: {path_str}\n\n```\n{content}\n```")
-                except Exception as e:
-                    summary_parts.append(f"### Error reading file: {path_str}\n\n{e}")
-            elif path.is_dir():
-                for root, _, files in os.walk(path):
-                    for file in files:
-                        file_path = Path(root) / file
-                        try:
-                            rel_path = file_path.relative_to(path.parent)
-                            content = file_path.read_text(encoding='utf-8')
-                            summary_parts.append(f"### File: {rel_path}\n\n```\n{content}\n```")
-                        except Exception as e:
-                            summary_parts.append(f"### Error reading file: {file_path}\n\n{e}")
-        
-        return "\n\n".join(summary_parts)
-
     def start_task(self, task_id: str, notification_queue: Optional[Queue] = None):
-        workspace_manager.create_workspace(task_id)
-        
-        task = task_manager.get_task(task_id)
-        if not task:
-            if notification_queue:
-                notification_queue.put(f"[Agent Error] Task with ID '{task_id}' not found.")
-            else:
-                print(f"[Agent Error] Task with ID '{task_id}' not found.")
-            return
-
-        task_manager.update_task_status(task_id, "in_progress")
-        
         def notify(message: str):
             if notification_queue:
                 notification_queue.put(f"[Task {task_id}] {message}")
             else:
                 print(f"[Task {task_id}] {message}")
-        
-        context_summary = self._ingest_context(task_id)
 
+        setup_message = workspace_manager.setup_workspace(task_id)
+        notify(setup_message)
+        if setup_message.startswith("Error"):
+            task_manager.update_task_status(task_id, "failed")
+            return
+
+        task = task_manager.get_task(task_id)
+        task_manager.update_task_status(task_id, "in_progress")
+        
         max_steps = task.get("max_steps", 15)
         try:
             current_step_count = len([h for h in task.get('history', []) if h.startswith('AI Response:')])
@@ -139,8 +89,8 @@ class AgentManager:
                 current_task_state = task_manager.get_task(task_id)
                 history_str = "\n".join(current_task_state["history"])
                 prompt_text = self._get_system_prompt(
-                    current_task_state["goal"], history_str, current_task_state["allowed_tools"], context_summary
-                ).replace("CURRENT_TASK_ID", task_id)
+                    current_task_state["goal"], history_str, current_task_state["allowed_tools"]
+                )
                 
                 payload = {"contents": [{"parts": [{"text": prompt_text}]}]}
                 try:
@@ -185,6 +135,14 @@ class AgentManager:
                         result = tool_func(**tool_args)
                         task_manager.log_to_task(task_id, f"Tool Result: {result}")
                         notify(f"Tool Result: {result}")
+
+                        # Auto-commit on successful file modification
+                        if tool_name in ["write_file", "modify_file"] and not result.startswith("Error"):
+                            workspace_path = workspace_manager.get_task_workspace(task_id)
+                            commit_message = f"Step {current_step_count}: Agent used {tool_name} on {tool_args.get('file_path')}"
+                            subprocess.run(["git", "add", "."], cwd=workspace_path)
+                            subprocess.run(["git", "commit", "-m", commit_message], cwd=workspace_path)
+                            notify(f"Committed changes to branch.")
 
                         if tool_name == 'task_complete':
                             task_manager.update_task_status(task_id, "completed_by_agent")

@@ -1,57 +1,76 @@
 import os
 import shutil
+import subprocess
+import re
 from pathlib import Path
 from src import task_manager
 
 def get_task_workspace(task_id: str) -> Path:
-    """Gets the dedicated, sandboxed directory for a task."""
-    # All agent work happens in a dedicated, isolated workspace.
-    base_dir = Path("workspaces").resolve()
-    workspace_path = base_dir / task_id
+    """Gets the root directory where the agent for this task should operate."""
+    task = task_manager.get_task(task_id)
+    if not task:
+        raise ValueError(f"Task {task_id} not found, cannot determine workspace.")
+    
+    # The workspace is now defined in the task itself.
+    workspace_path = Path(task.get("workspace_path", ".")).expanduser().resolve()
     return workspace_path
 
-def create_workspace(task_id: str):
-    """Creates or cleans the dedicated directory for a task."""
-    workspace_path = get_task_workspace(task_id)
-    if workspace_path.exists():
-        shutil.rmtree(workspace_path)
-    workspace_path.mkdir(parents=True, exist_ok=True)
-    print(f"Created workspace at: {workspace_path}")
-
-def get_safe_path(task_id: str, relative_path: str, write_access_required: bool = False) -> Path:
+def setup_workspace(task_id: str) -> str:
     """
-    Returns a safe, absolute path for a file operation.
-    Prevents directory traversal attacks and enforces read-only paths.
+    Sets up the workspace for the agent.
+    If the task is configured to use a new branch, it creates one.
+    Returns a status message.
     """
     task = task_manager.get_task(task_id)
     if not task:
-        raise ValueError(f"Task {task_id} not found.")
+        return "Error: Task not found."
 
-    # Normalize the relative path to prevent traversal issues.
-    # os.path.normpath is crucial here.
+    workspace_path = get_task_workspace(task_id)
+    if not workspace_path.is_dir() or not (workspace_path / ".git").exists():
+        return f"Error: Workspace path '{workspace_path}' is not a valid git repository."
+
+    if task.get("create_branch"):
+        # Sanitize goal to create a valid branch name
+        sanitized_goal = re.sub(r'[^a-zA-Z0-9\-]', '_', task['goal'].lower())[:50]
+        branch_name = f"agent/{task_id}-{sanitized_goal}"
+        
+        try:
+            # Check if branch already exists
+            subprocess.run(["git", "rev-parse", "--verify", branch_name], check=True, cwd=workspace_path, capture_output=True)
+            # If it exists, just check it out
+            subprocess.run(["git", "checkout", branch_name], check=True, cwd=workspace_path, capture_output=True)
+            return f"Checked out existing branch '{branch_name}' in '{workspace_path}'"
+        except subprocess.CalledProcessError:
+            # Branch doesn't exist, create it
+            try:
+                subprocess.run(["git", "checkout", "-b", branch_name], check=True, cwd=workspace_path, capture_output=True)
+                return f"Created and checked out new branch '{branch_name}' in '{workspace_path}'"
+            except subprocess.CalledProcessError as e:
+                return f"Error creating git branch: {e.stderr.decode()}"
+    
+    return f"Working in existing branch in '{workspace_path}'"
+
+def get_safe_path(task_id: str, relative_path: str) -> Path:
+    """
+    Returns a safe, absolute path within the task's defined workspace.
+    Prevents directory traversal attacks.
+    """
+    workspace_path = get_task_workspace(task_id)
+    
+    # os.path.normpath is crucial for security.
     normalized_relative_path = os.path.normpath(relative_path)
+    
     if normalized_relative_path.startswith("..") or os.path.isabs(normalized_relative_path):
-        raise PermissionError(f"Invalid path specified: {relative_path}")
+        raise PermissionError(f"Path traversal is not allowed: {relative_path}")
 
-    # By default, all operations are relative to the task's workspace.
-    base_path = get_task_workspace(task_id)
-    safe_path = (base_path / normalized_relative_path).resolve()
+    safe_path = (workspace_path / normalized_relative_path).resolve()
 
-    # Final check to ensure the path is within the workspace.
-    if base_path not in safe_path.parents and base_path != safe_path:
+    # Final check to ensure the resolved path is within the workspace.
+    if workspace_path not in safe_path.parents and workspace_path != safe_path:
         raise PermissionError("Attempted to access file outside of workspace")
-
-    if write_access_required:
-        read_only_paths = [Path(p).resolve() for p in task.get("read_only_paths", [])]
-        for read_only_path in read_only_paths:
-            if read_only_path in safe_path.parents or read_only_path == safe_path:
-                raise PermissionError(f"Write operation denied. Path is in a read-only directory: {relative_path}")
-                
+        
     return safe_path
 
 def cleanup_workspace(task_id: str):
-    """Deletes a task's workspace directory."""
-    workspace_path = get_task_workspace(task_id)
-    if workspace_path.exists():
-        shutil.rmtree(workspace_path)
-        print(f"Cleaned up workspace: {workspace_path}")
+    """No-op in git-native mode, as we want to keep the branches."""
+    print(f"Task {task_id} finished. Workspace changes are preserved in the git branch.")
