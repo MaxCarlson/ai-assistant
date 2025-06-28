@@ -2,6 +2,9 @@
 data/*
 tree-sitter-*
 tasks.json
+workspaces/*
+exports/*
+out*.txt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

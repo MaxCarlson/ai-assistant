@@ -3,6 +3,7 @@ import json
 import requests
 import os
 import re
+import inspect
 from typing import Dict, Any, Optional, List
 from queue import Queue
 from src import workspace_manager, tool_manager, task_manager
@@ -37,27 +38,27 @@ class AgentManager:
         tool_descriptions = tool_manager.get_tool_descriptions(allowed_tools)
         
         prompt_parts = [
-            "You are an autonomous AI agent. Your primary goal is to solve the user's request by using a set of tools.",
+            "You are an expert-level autonomous software engineer agent. Your goal is to solve the user's request by writing and modifying code.",
             "**Your Goal:**", goal,
-            "**Your Thought Process:**",
-            "1.  Analyze the user's goal.",
-            "2.  If the goal is ambiguous or you need more information, you MUST use the `request_user_input` tool immediately. Do not attempt to proceed without clarification.",
-            "3.  If the goal is clear, formulate a plan and select the best tool to execute the first step.",
-            "4.  Observe the result of the tool execution.",
-            "5.  Based on the result, decide on the next step, which could be using another tool, or marking the task as complete with `task_complete`.",
+            "**Your Thought Process & Self-Correction:**",
+            "1.  Analyze the user's goal and the available tools.",
+            "2.  If the goal is ambiguous, you MUST use `request_user_input` immediately.",
+            "3.  **CRITICAL:** If a tool returns an error, first use `read_file` to inspect the code. Then, for small corrections (like fixing a typo or one line of code), you MUST use the `modify_file` tool. Only use `write_file` to create a new file or if the file requires a complete rewrite.",
+            "4.  **Pytest Note:** If you get a `ModuleNotFoundError` when running `run_pytest`, do not try to create `__init__.py` files. The tool handles the `PYTHONPATH` automatically. The error means your `import` statement is wrong in the test file. Use `read_file` and `modify_file` to fix the import.",
+            "5.  When the goal is fully achieved, use the `task_complete` tool.",
             "**Available Tools:**", tool_descriptions,
             "**Response Format:**",
-            "You MUST respond with a single JSON object enclosed in ```json ... ```.",
-            "The JSON object must contain your 'thought' and the 'tool_call' you want to make. If you are only thinking or waiting, `tool_call` can be `null`.",
-            f"""**Example Response Format:**
+            "You MUST respond with a single JSON object enclosed in ```json ... ```. The `content` argument for `write_file` must be a valid JSON string. This means all newline characters within the code MUST be escaped as `\\n`.",
+            f"""**Example for `write_file`:**
 ```json
 {{
-    "thought": "I need to ask the user for the filename.",
+    "thought": "I will create a simple python script.",
     "tool_call": {{
-        "name": "request_user_input",
+        "name": "write_file",
         "args": {{
             "task_id": "CURRENT_TASK_ID",
-            "question": "What should I name the output file?"
+            "file_path": "hello.py",
+            "content": "def main():\\n    print('Hello, World!')\\n\\nif __name__ == '__main__':\\n    main()"
         }}
     }}
 }}
@@ -68,6 +69,8 @@ class AgentManager:
         return "\n\n".join(prompt_parts)
 
     def start_task(self, task_id: str, notification_queue: Optional[Queue] = None):
+        workspace_manager.create_workspace(task_id)
+        
         task = task_manager.get_task(task_id)
         if not task:
             if notification_queue:
@@ -86,8 +89,8 @@ class AgentManager:
 
         max_steps = task.get("max_steps", 15)
         try:
-            for step in range(max_steps):
-                notify(f"--- Step {step+1}/{max_steps} ---")
+            current_step_count = len([h for h in task.get('history', []) if h.startswith('AI Response:')])
+            while current_step_count < max_steps:
                 
                 current_task_state = task_manager.get_task(task_id)
                 history_str = "\n".join(current_task_state["history"])
@@ -110,6 +113,7 @@ class AgentManager:
                     notify(f"--- DEBUG: RAW AI RESPONSE ---\n{repr(response_content)}\n---")
 
                 task_manager.log_to_task(task_id, f"AI Response: {response_content}")
+                current_step_count += 1
                 
                 try:
                     json_str = _extract_json_from_response(response_content)
@@ -124,19 +128,21 @@ class AgentManager:
 
                     if tool_call and tool_call.get("name") in current_task_state["allowed_tools"]:
                         tool_name = tool_call["name"]
+                        tool_func = tool_manager.TOOLS[tool_name]
                         tool_args = tool_call.get("args", {})
-                        if 'task_id' not in tool_args:
+                        
+                        # Fixed: Only add task_id if the tool's signature includes it.
+                        sig = inspect.signature(tool_func)
+                        if 'task_id' in sig.parameters:
                             tool_args['task_id'] = task_id
                         
-                        # The agent manager handles state changes based on the tool call
                         if tool_name == 'request_user_input':
                             task_manager.update_task_status(task_id, 'pending_input')
                         
-                        result = tool_manager.TOOLS[tool_name](**tool_args)
+                        result = tool_func(**tool_args)
                         notify(f"Tool Result: {result}")
                         task_manager.log_to_task(task_id, f"Tool Result: {result}")
 
-                        # The agent manager stops the loop based on the tool call
                         if tool_name == 'task_complete':
                             task_manager.update_task_status(task_id, "completed_by_agent")
                             break
@@ -153,6 +159,8 @@ class AgentManager:
                     notify(error_msg)
                     task_manager.log_to_task(task_id, error_msg)
                     continue
+                
+                max_steps = task_manager.get_task(task_id).get("max_steps", 15)
 
             if task_manager.get_task(task_id)["status"] == "in_progress":
                 task_manager.update_task_status(task_id, "completed_max_steps")
@@ -165,6 +173,6 @@ class AgentManager:
             task_manager.update_task_status(task_id, "failed")
         
         finally:
-            workspace_manager.cleanup_workspace(task_id)
             final_status = task_manager.get_task(task_id)['status']
-            notify(f"✅ Task {task_id} finished with status: {final_status}. Workspace cleaned up.")
+            if final_status not in ['pending_input', 'completed_by_agent']:
+                 notify(f"✅ Task {task_id} finished with status: {final_status}.")

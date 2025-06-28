@@ -1,8 +1,12 @@
 import json
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+from src import tool_manager
 
 TASKS_FILE = Path("tasks.json")
+
+# Define a set of essential tools the agent ALWAYS needs to function.
+CORE_TOOLS = {"write_file", "read_file", "request_user_input", "task_complete"}
 
 def _load_tasks() -> Dict[str, Any]:
     """Loads the tasks from the JSON file."""
@@ -30,20 +34,26 @@ def create_task(
     working_dir: Optional[str] = None
 ) -> str:
     """Creates a new task and saves it to disk."""
-    from src.tool_manager import TOOLS
     tasks = _load_tasks()
     next_id = 0
     if tasks:
         next_id = max(int(k) for k in tasks.keys()) + 1
     
     task_id = str(next_id)
+    
+    # Ensure the agent always has its core tools, plus any user-selected ones.
+    final_tools = CORE_TOOLS.copy()
+    if allowed_tools:
+        final_tools.update(allowed_tools)
+
     tasks[task_id] = {
         "id": task_id,
         "goal": goal,
+        "original_goal": goal,
         "history": [],
         "status": "pending",
         "max_steps": max_steps,
-        "allowed_tools": allowed_tools or list(TOOLS.keys()),
+        "allowed_tools": list(final_tools),
         "working_dir": working_dir or str(Path("workspaces").resolve()),
     }
     _save_tasks(tasks)

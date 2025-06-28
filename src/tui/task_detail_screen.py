@@ -1,6 +1,8 @@
 import json
 import re
 import threading
+import shutil
+from pathlib import Path
 from textual.screen import Screen
 from textual.widgets import Header, Footer, Collapsible, Markdown, Static, Input
 from textual.containers import Vertical, VerticalScroll
@@ -8,7 +10,10 @@ from textual.color import Color
 from textual.binding import Binding
 from rich.panel import Panel
 from rich.syntax import Syntax
-from src import task_manager, agent_manager
+from rich.text import Text
+from rich.markup import escape
+from src import task_manager, agent_manager, workspace_manager
+from .code_view_screen import CodeViewScreen
 
 def parse_history_to_steps(history: list[str]) -> list:
     """
@@ -16,16 +21,13 @@ def parse_history_to_steps(history: list[str]) -> list:
     step is a dictionary with a 'type' and associated data.
     """
     steps = []
+    i = 0
     json_pattern = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
     
-    i = 0
     while i < len(history):
         line = history[i]
         
-        if line.startswith("User Input:"):
-            steps.append({"type": "user", "content": line})
-            i += 1
-        elif line.startswith("---"):
+        if line.startswith("User Input:") or line.startswith("---"):
             steps.append({"type": "system", "content": line})
             i += 1
         elif line.startswith("AI Response:"):
@@ -46,7 +48,6 @@ def parse_history_to_steps(history: list[str]) -> list:
                 i += 1
             steps.append(step)
         else:
-            # Fallback for unknown lines
             i += 1
             
     return steps
@@ -54,15 +55,19 @@ def parse_history_to_steps(history: list[str]) -> list:
 class TaskDetailScreen(Screen):
     """A screen to display the detailed, structured history of a single task."""
     BINDINGS = [
-        Binding("s", "start_resume_task", "Start / Resume"),
-        Binding("e", "extend_task", "Extend Steps"),
-        Binding("r", "redirect_task", "Redirect Goal"),
+        Binding("s", "start_resume_task", "Start/Resume"),
+        Binding("e", "extend_task", "Extend"),
+        Binding("r", "redirect_task", "Redirect"),
+        Binding("v", "view_code", "View Code"),
+        Binding("x", "export_log", "Export Log"),
+        Binding("X", "export_all", "Export All"),
     ]
 
     def __init__(self, task_id: str):
         super().__init__()
         self.task_id = task_id
         self.displayed_lines = 0
+        self.collapsible_states = {}
 
     def compose(self):
         yield Header(f"Task Detail - ID: {self.task_id}")
@@ -121,10 +126,46 @@ class TaskDetailScreen(Screen):
         self.query_one("#redirect_input_field").focus()
         self.sub_title = "Enter new goal and press Enter to redirect task."
 
+    def action_view_code(self):
+        self.app.push_screen(CodeViewScreen(self.task_id))
+
+    def action_export_log(self):
+        task = task_manager.get_task(self.task_id)
+        if not task: return
+        
+        export_dir = Path("exports")
+        export_dir.mkdir(exist_ok=True)
+        log_file = export_dir / f"task_{self.task_id}_log.txt"
+        
+        with open(log_file, "w") as f:
+            f.write(f"Goal: {task.get('original_goal', task['goal'])}\n\n")
+            f.write("\n".join(task['history']))
+        
+        self.sub_title = f"Log exported to {log_file}"
+
+    def action_export_all(self):
+        self.action_export_log()
+        
+        export_dir = Path("exports") / f"task_{self.task_id}_files"
+        workspace_path = workspace_manager.get_task_workspace(self.task_id)
+        
+        if export_dir.exists():
+            shutil.rmtree(export_dir)
+        
+        if workspace_path.exists():
+            shutil.copytree(workspace_path, export_dir)
+            self.sub_title = f"Log and files exported to {export_dir.parent}"
+        else:
+            self.sub_title = "Log exported, but no workspace files to copy."
+
     def update_log(self) -> None:
         container = self.query_one("#task_log_container")
         task = task_manager.get_task(self.task_id)
         if not task: return
+
+        self.collapsible_states = {
+            c.id: c.collapsed for c in container.query(Collapsible) if c.id
+        }
 
         redirect_input = self.query_one("#redirect_input_field", Input)
         user_input = self.query_one("#user_input_field", Input)
@@ -137,31 +178,56 @@ class TaskDetailScreen(Screen):
         if len(task['history']) == self.displayed_lines: return
         container.remove_children()
         
+        container.mount(
+            Static(Panel(task.get('original_goal', task['goal']), title="Original Goal", border_style="white"))
+        )
+
         structured_history = parse_history_to_steps(task['history'])
         for i, step in enumerate(structured_history):
             children = []
             step_type = step.get("type")
 
-            if step_type == "user":
-                children.append(Static(Panel(step['content'], title="User Input", border_style="magenta")))
-            elif step_type == "system":
-                children.append(Static(Panel(step['content'], title="System Message", border_style="blue")))
+            if step_type == "system":
+                children.append(Static(Panel(escape(step['content']), title="System Message", border_style="blue")))
             elif step_type == "agent":
+                thought_id = f"step_{i}_thought"
+                action_id = f"step_{i}_action"
+
                 if step.get("thought"):
-                    children.append(Collapsible(Markdown(f"> {step['thought']}"), title="View Thought"))
-                if step.get("tool_call"):
-                    tool_call_str = json.dumps(step["tool_call"], indent=2)
-                    children.append(Collapsible(Static(Syntax(tool_call_str, "json", theme="monokai", word_wrap=True)), title="View Tool Call"))
-                if step.get("tool_result"):
-                    panel_color = "green"
-                    if "paused" in step["tool_result"]: panel_color = "yellow"
-                    children.append(Static(Panel(step["tool_result"], title="Tool Result", border_style=panel_color)))
-            
+                    is_collapsed = self.collapsible_states.get(thought_id, False)
+                    thought_collapsible = Collapsible(
+                        Markdown(f"{step['thought']}"), 
+                        title="View Thought", 
+                        id=thought_id,
+                        collapsed=is_collapsed
+                    )
+                    children.append(thought_collapsible)
+                
+                if step.get("tool_call") or step.get("tool_result"):
+                    console_content = []
+                    if step.get("tool_call"):
+                        display_call = dict(step["tool_call"])
+                        if 'args' in display_call and 'content' in display_call['args']:
+                            content = display_call['args']['content']
+                            if content and len(content) > 200:
+                                display_call['args']['content'] = content[:200] + "..."
+                        
+                        tool_call_str = json.dumps(display_call, indent=2)
+                        console_content.append(Text.from_markup(f"[bold cyan]$> Tool Call:[/bold cyan]\n{tool_call_str}"))
+
+                    if step.get("tool_result"):
+                        escaped_result = escape(step['tool_result'])
+                        console_content.append(Text.from_markup(f"\n[bold green]$> Tool Result:[/bold green]\n{escaped_result}"))
+                    
+                    is_collapsed = self.collapsible_states.get(action_id, True)
+                    children.append(
+                        Collapsible(Static(Text.assemble(*console_content)), title="View Action & Result", id=action_id, collapsed=is_collapsed)
+                    )
+
             step_container = Vertical(*children)
             step_container.styles.border = ("round", Color.parse("grey"))
             step_container.styles.margin = (1, 0)
-            # Fixed: Removed min_height to allow natural sizing
-            step_container.styles.height = "auto" 
+            step_container.styles.height = "auto"
             step_container.border_title = f"Step {i + 1}"
             container.mount(step_container)
 

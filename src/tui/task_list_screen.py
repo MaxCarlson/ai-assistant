@@ -92,7 +92,6 @@ class TaskListScreen(Screen):
             task_manager.extend_task_steps(task_id)
             self._start_task_in_background(task_id)
 
-
     def action_clone_task(self) -> None:
         """Called when 'c' is pressed. Creates a new task from an existing one."""
         task_id = self._get_key_for_selected_row()
@@ -102,9 +101,11 @@ class TaskListScreen(Screen):
         original_task = task_manager.get_task(task_id)
         if original_task:
             new_task_id = task_manager.create_task(
-                goal=original_task['goal'],
+                # Fixed: Use the original_goal for cloning.
+                goal=original_task.get('original_goal', original_task['goal']),
                 max_steps=original_task['max_steps'],
-                allowed_tools=original_task['allowed_tools']
+                allowed_tools=original_task['allowed_tools'],
+                working_dir=original_task.get('working_dir')
             )
             self.update_tasks()
             self._start_task_in_background(new_task_id)
