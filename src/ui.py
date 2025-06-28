@@ -42,12 +42,12 @@ def format_and_print_response(response_text):
     if last_code_block:
         console.print("\n[dim]Type '/copy' to copy the last code block to the clipboard.[/dim]")
 
-def start_chat_loop(agent, agent_manager=None):
+def start_chat_loop(agent, agent_manager=None, debug=False):
     """Handles the interactive AI chat session with command history."""
     conversation_history = []
     session = PromptSession(history=InMemoryHistory())
     
-    console.print("[bold green]AI Assistant Initialized. Type '/exit' to quit or '/help' for commands.[/bold green]", justify="center")
+    console.print("[bold green]AI Assistant Initialized. Type '/exit' or '/help'.[/bold green]", justify="center")
 
     while True:
         try:
@@ -57,7 +57,6 @@ def start_chat_loop(agent, agent_manager=None):
 
             if user_input.lower().startswith('/'):
                 if user_input.lower() in ["/exit", "/quit"]:
-                    console.print("[bold red]Exiting AI Assistant...[/bold red]")
                     break
                 if user_input.lower() == "/copy":
                     copy_last_code_to_clipboard()
@@ -77,12 +76,10 @@ def start_chat_loop(agent, agent_manager=None):
                     console.print("  /task_list          - List all tasks and their status.")
                     continue
 
-                # New: /do command
                 if user_input.lower().startswith("/do "):
                     goal = user_input[len("/do "):].strip()
-                    console.print(f"[green]✅ Creating and starting task with goal: {goal}[/green]")
                     task_id = agent_manager.create_task(goal)
-                    console.print(f"[yellow]🚀 Starting task '{task_id}'...[/yellow]")
+                    console.print(f"✅ Task '{task_id}' created. Starting now...")
                     result = agent_manager.start_task(task_id)
                     console.print(f"[green]✅ {result}[/green]")
                     continue
@@ -109,6 +106,7 @@ def start_chat_loop(agent, agent_manager=None):
                 console.print(f"[red]Unknown command: {user_input}[/red]")
                 continue
 
+            # Regular chat logic
             console.print("[yellow]Assistant is thinking...[/yellow]", end="\r")
             response_text = agent.handle_task(user_input, conversation_history)
             console.print(" " * 25, end="\r")
@@ -121,4 +119,4 @@ def start_chat_loop(agent, agent_manager=None):
             console.print("\n[bold red]Interrupted. Exiting...[/bold red]")
             break
         except Exception as e:
-            console.print(f"[bold red]An unexpected error occurred: {e}[/bold red]")
+            console.print(f"[bold red]An unexpected error occurred in the main UI loop: {e}[/bold red]")

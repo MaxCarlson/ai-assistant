@@ -3,15 +3,32 @@ import json
 import requests
 import os
 import re
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from src import workspace_manager, tool_manager
 
+def _extract_json_from_response(text: str) -> Optional[str]:
+    """
+    Robustly extracts a JSON string from the AI's response.
+    Handles markdown fences, surrounding text, and leading/trailing whitespace.
+    """
+    fence_match = re.search(r'```json\s*(\{.*?\})\s*```', text, re.DOTALL)
+    if fence_match:
+        return fence_match.group(1).strip()
+
+    start_index = text.find('{')
+    end_index = text.rfind('}')
+    if start_index != -1 and end_index != -1 and end_index > start_index:
+        return text[start_index:end_index+1].strip()
+        
+    return None
+
 class AgentManager:
-    def __init__(self, model_name="gemini-1.5-pro"):
+    def __init__(self, model_name="gemini-1.5-pro", debug: bool = False):
         self.tasks: Dict[str, Dict[str, Any]] = {}
         self.task_counter = 0
         self.tool_descriptions = tool_manager.get_tool_descriptions()
         self.system_prompt_template = self._load_system_prompt()
+        self.debug = debug
         
         self.model_name = model_name
         self.api_key = os.getenv('GOOGLE_API_KEY_AI_ASSISTANT')
@@ -20,6 +37,9 @@ class AgentManager:
         self.api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={self.api_key}"
 
     def _load_system_prompt(self) -> str:
+        """
+        Builds the system prompt, correctly escaping literal braces for .format().
+        """
         thought_process = """
 **Your Thought Process:**
 1.  **Analyze the Goal:** Understand what needs to be done.
@@ -29,29 +49,33 @@ class AgentManager:
     - "thought": A brief explanation of your reasoning for this step.
     - "tool_call": A dictionary with "name" and "args" for the tool you want to use. The "args" MUST include the "task_id".
 """
+        # THE FIX: All literal braces in this example are doubled (e.g., {{, }})
+        # to escape them for the .format() method.
         example_json = """
 **Example Response Format:**
 ```json
-{
+{{
     "thought": "I need to create a Python file to start working on the problem.",
-    "tool_call": {
+    "tool_call": {{
         "name": "write_file",
-        "args": {
+        "args": {{
             "task_id": "CURRENT_TASK_ID",
             "file_path": "main.py",
             "content": "print('Hello, World!')"
-        }
-    }
-}
+        }}
+    }}
+}}
 ```"""
         prompt_parts = [
             "You are an autonomous AI agent responsible for completing a given task.",
             "You will be given a high-level goal. Your job is to break it down into steps and use the available tools to accomplish it.",
-            "**Your Goal:**\n{{goal}}",
+            # Placeholders for .format() use SINGLE braces.
+            "**Your Goal:**\n{goal}",
             "**Available Tools:**", self.tool_descriptions,
             thought_process.strip(),
             example_json.strip(),
-            "**Conversation History (Previous Steps):**\n{{history}}",
+            # Placeholders for .format() use SINGLE braces.
+            "**Conversation History (Previous Steps):**\n{history}",
             "\nNow, begin. What is your first step?"
         ]
         return "\n\n".join(prompt_parts)
@@ -70,45 +94,39 @@ class AgentManager:
         task = self.tasks[task_id]
         task["status"] = "in_progress"
         
-        for step in range(max_steps):
-            print(f"\n--- Task {task_id} | Step {step+1}/{max_steps} ---")
-            
-            history_str = "\n".join(task["history"])
-            prompt_text = self.system_prompt_template.format(
-                goal=task["goal"],
-                history=history_str,
-            ).replace("CURRENT_TASK_ID", task_id)
-            
-            payload = {"contents": [{"parts": [{"text": prompt_text}]}]}
-            try:
-                response = requests.post(self.api_url, json=payload, timeout=120)
-                response.raise_for_status()
-                data = response.json()
-                response_content = data['candidates'][0]['content']['parts'][0]['text']
-            except Exception as e:
-                error_msg = f"API Error: {e}"
-                print(error_msg)
-                task["history"].append(f"Step {step+1} Error: {error_msg}")
-                continue
+        try:
+            for step in range(max_steps):
+                print(f"\n--- Task {task_id} | Step {step+1}/{max_steps} ---")
+                
+                history_str = "\n".join(task["history"])
+                # This .format() call will now work correctly.
+                prompt_text = self.system_prompt_template.format(goal=task["goal"], history=history_str).replace("CURRENT_TASK_ID", task_id)
+                
+                payload = {"contents": [{"parts": [{"text": prompt_text}]}]}
+                try:
+                    response = requests.post(self.api_url, json=payload, timeout=120)
+                    response.raise_for_status()
+                    data = response.json()
+                    response_content = data.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+                except Exception as e:
+                    print(f"API Error: {e}")
+                    task["history"].append(f"Step {step+1} API Error: {e}")
+                    continue
 
-            task["history"].append(f"Step {step+1} AI Response: {response_content}")
-            
-            try:
-                # Fixed: More robust JSON extraction logic
-                json_str = None
-                # 1. Try to find JSON within markdown fences
-                fence_match = re.search(r'```json\s*(\{.*?\})\s*```', response_content, re.DOTALL)
-                if fence_match:
-                    json_str = fence_match.group(1)
-                else:
-                    # 2. If not found, find the first '{' and last '}'
-                    start_index = response_content.find('{')
-                    end_index = response_content.rfind('}')
-                    if start_index != -1 and end_index != -1 and end_index > start_index:
-                        json_str = response_content[start_index:end_index+1]
+                if self.debug:
+                    print(f"--- DEBUG: RAW AI RESPONSE ---\n{repr(response_content)}\n--- END RAW RESPONSE ---")
+
+                task["history"].append(f"Step {step+1} AI Response: {response_content}")
+                
+                json_str = _extract_json_from_response(response_content)
+                
+                if self.debug:
+                    print(f"--- DEBUG: EXTRACTED JSON STRING ---\n{repr(json_str)}\n--- END EXTRACTED STRING ---")
 
                 if json_str is None:
-                    raise json.JSONDecodeError("Could not find a JSON object in the AI's response.", response_content, 0)
+                    print("Error: Could not find a valid JSON object in the AI's response.")
+                    task["history"].append("Step {step+1} Error: No JSON object found.")
+                    continue
 
                 action_json = json.loads(json_str)
                 thought = action_json.get("thought", "No thought provided.")
@@ -117,26 +135,22 @@ class AgentManager:
                 print(f"AI Thought: {thought}")
 
                 if tool_call and tool_call.get("name") in tool_manager.TOOLS:
-                    tool_name = tool_call["name"]
                     tool_args = tool_call.get("args", {})
-                    
-                    print(f"Executing Tool: {tool_name} with args: {tool_args}")
-                    tool_function = tool_manager.TOOLS[tool_name]
-                    result = tool_function(**tool_args)
+                    if 'task_id' not in tool_args:
+                        tool_args['task_id'] = task_id
+                    result = tool_manager.TOOLS[tool_call["name"]](**tool_args)
                     print(f"Tool Result: {result}")
                     task["history"].append(f"Step {step+1} Tool Result: {result}")
                 else:
-                    task["history"].append("Step {step+1} Error: Invalid or missing tool call.")
                     print("Error: Invalid or missing tool call in AI response.")
+                    task["history"].append("Step {step+1} Error: Invalid tool call.")
 
-            except Exception as e:
-                import traceback
-                error_msg = f"An unexpected error occurred while processing the AI response: {e}"
-                print(error_msg)
-                print(f"--- FAULTY AI RESPONSE ---\n{response_content}\n--- END OF RESPONSE ---")
-                traceback.print_exc()
-                task["history"].append(f"Step {step+1} Error: {error_msg}")
+            task["status"] = "completed"
+        except Exception as e:
+            import traceback
+            print(f"\n[bold red]A critical error occurred during task execution: {e}[/bold red]")
+            traceback.print_exc()
+            task["status"] = "failed"
 
-        task["status"] = "completed"
         workspace_manager.cleanup_workspace(task_id)
-        return f"Task {task_id} finished after {max_steps} steps and workspace has been cleaned up."
+        return f"Task {task_id} finished with status: {task['status']}."
