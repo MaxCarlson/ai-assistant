@@ -1,5 +1,5 @@
 from textual.screen import ModalScreen
-from textual.widgets import Input, Button, Label, Checkbox # Corrected import
+from textual.widgets import Input, Button, Label, Checkbox
 from textual.containers import Vertical, VerticalScroll
 from src import task_manager, tool_manager
 
@@ -10,11 +10,10 @@ class AddTaskScreen(ModalScreen):
         with Vertical(id="add_task_dialog"):
             yield Label("Create New Task", id="add_task_title")
             yield Input(placeholder="Enter task goal...", id="goal_input")
+            yield Input(placeholder="Working Directory (optional, defaults to ./workspaces)", id="work_dir_input")
             yield Input(value="15", placeholder="Max steps...", id="steps_input")
             yield Label("Allowed Tools:")
-            # Use a scrollable container for the checkboxes
             with VerticalScroll(id="tools_container"):
-                # Create one Checkbox per tool
                 for tool_name in tool_manager.TOOLS.keys():
                     yield Checkbox(tool_name, value=True, id=f"cb_{tool_name}")
             
@@ -27,12 +26,12 @@ class AddTaskScreen(ModalScreen):
         if event.button.id == "create_button":
             goal = self.query_one("#goal_input", Input).value
             if not goal:
-                return # Do nothing if goal is empty
+                return
             
+            work_dir = self.query_one("#work_dir_input", Input).value or None
             max_steps_str = self.query_one("#steps_input", Input).value
             max_steps = int(max_steps_str) if max_steps_str.isdigit() else 15
             
-            # Get the labels of all checked checkboxes
             allowed_tools = [
                 cb.label.plain for cb in self.query(Checkbox) if cb.value
             ]
@@ -40,8 +39,9 @@ class AddTaskScreen(ModalScreen):
             task_id = task_manager.create_task(
                 goal=goal,
                 max_steps=max_steps,
-                allowed_tools=allowed_tools
+                allowed_tools=allowed_tools,
+                working_dir=work_dir
             )
-            self.dismiss(task_id) # Dismiss the modal and return the new task_id
+            self.dismiss(task_id)
         else:
-            self.dismiss(None) # Just dismiss the modal
+            self.dismiss(None)

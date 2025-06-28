@@ -34,7 +34,7 @@ class TaskListScreen(Screen):
         task_thread = threading.Thread(target=agent.start_task, args=(task_id,))
         task_thread.daemon = True
         task_thread.start()
-        self.sub_title = f"Task {task_id} started in background"
+        self.sub_title = f"Task {task_id} started/resumed in background"
 
     def update_tasks(self) -> None:
         """Clears and re-populates the task table with the latest data."""
@@ -73,7 +73,8 @@ class TaskListScreen(Screen):
         if not table.row_count or table.cursor_row < 0:
             return None
         try:
-            return table.rows[table.cursor_row].key.value
+            row_key = list(table.rows.keys())[table.cursor_row]
+            return row_key.value
         except (IndexError, AttributeError):
             return None
 
@@ -84,10 +85,13 @@ class TaskListScreen(Screen):
             return
         
         task = task_manager.get_task(task_id)
-        # Allow resuming from any state that isn't already completed or waiting for input
-        resumable_states = ['pending', 'in_progress', 'completed_max_steps', 'failed']
+        resumable_states = ['pending', 'in_progress', 'failed']
         if task and task['status'] in resumable_states:
             self._start_task_in_background(task['id'])
+        elif task and task['status'] == 'completed_max_steps':
+            task_manager.extend_task_steps(task_id)
+            self._start_task_in_background(task_id)
+
 
     def action_clone_task(self) -> None:
         """Called when 'c' is pressed. Creates a new task from an existing one."""

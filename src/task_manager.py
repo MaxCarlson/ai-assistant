@@ -23,11 +23,15 @@ def _save_tasks(tasks: Dict[str, Any]):
     with open(TASKS_FILE, 'w') as f:
         json.dump(tasks, f, indent=2)
 
-def create_task(goal: str, max_steps: int = 15, allowed_tools: Optional[List[str]] = None) -> str:
+def create_task(
+    goal: str, 
+    max_steps: int = 15, 
+    allowed_tools: Optional[List[str]] = None,
+    working_dir: Optional[str] = None
+) -> str:
     """Creates a new task and saves it to disk."""
-    from src.tool_manager import TOOLS # Local import to avoid circular dependency
+    from src.tool_manager import TOOLS
     tasks = _load_tasks()
-    # Find the next available integer ID
     next_id = 0
     if tasks:
         next_id = max(int(k) for k in tasks.keys()) + 1
@@ -39,7 +43,8 @@ def create_task(goal: str, max_steps: int = 15, allowed_tools: Optional[List[str
         "history": [],
         "status": "pending",
         "max_steps": max_steps,
-        "allowed_tools": allowed_tools or list(TOOLS.keys())
+        "allowed_tools": allowed_tools or list(TOOLS.keys()),
+        "working_dir": working_dir or str(Path("workspaces").resolve()),
     }
     _save_tasks(tasks)
     return task_id
@@ -75,4 +80,24 @@ def delete_task(task_id: str):
     tasks = _load_tasks()
     if task_id in tasks:
         del tasks[task_id]
+        _save_tasks(tasks)
+
+def extend_task_steps(task_id: str, additional_steps: int = 15):
+    """Adds more steps to a task and resets its status to be resumed."""
+    tasks = _load_tasks()
+    if task_id in tasks:
+        tasks[task_id]["max_steps"] += additional_steps
+        if tasks[task_id]["status"] == "completed_max_steps":
+            tasks[task_id]["status"] = "in_progress"
+        log_to_task(task_id, f"--- Task extended by {additional_steps} steps. ---")
+        _save_tasks(tasks)
+
+def update_task_goal(task_id: str, new_goal: str):
+    """Updates the goal of a task and logs the change."""
+    tasks = _load_tasks()
+    if task_id in tasks:
+        original_goal = tasks[task_id]['goal']
+        tasks[task_id]['goal'] = new_goal
+        log_to_task(task_id, f"--- User redirected task. Original goal: '{original_goal}' ---")
+        log_to_task(task_id, f"--- New goal: '{new_goal}' ---")
         _save_tasks(tasks)

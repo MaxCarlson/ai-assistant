@@ -9,7 +9,6 @@ from typing import Callable, Dict, List
 from src import workspace_manager
 
 # --- Tool Implementations ---
-
 def write_file(task_id: str, file_path: str, content_base64: str) -> str:
     """
     Decodes a Base64 string and writes the resulting content to a file.
@@ -18,7 +17,7 @@ def write_file(task_id: str, file_path: str, content_base64: str) -> str:
     :param content_base64: The Base64 encoded string of the content to write.
     """
     try:
-        full_path = workspace_manager.get_workspace_path(task_id, file_path)
+        full_path = workspace_manager.get_safe_path(task_id, file_path)
         full_path.parent.mkdir(parents=True, exist_ok=True)
         decoded_content = base64.b64decode(content_base64)
         with open(full_path, 'wb') as f:
@@ -30,10 +29,16 @@ def write_file(task_id: str, file_path: str, content_base64: str) -> str:
 def execute_python_code(task_id: str, file_path: str) -> str:
     """Executes a Python script from the task's workspace."""
     try:
-        full_path = workspace_manager.get_workspace_path(task_id, file_path)
+        full_path = workspace_manager.get_safe_path(task_id, file_path)
         if not full_path.exists():
             return f"Error: Cannot execute file, '{file_path}' does not exist."
-        result = subprocess.run(["python", str(full_path)], capture_output=True, text=True, timeout=30)
+        
+        # Execute from within the workspace directory
+        workspace_dir = workspace_manager.get_task_workspace(task_id)
+        result = subprocess.run(
+            ["python", str(full_path)], 
+            capture_output=True, text=True, timeout=30, cwd=workspace_dir
+        )
         return f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     except Exception as e:
         return f"Error executing Python code: {e}"
