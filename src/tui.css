@@ -1,0 +1,24 @@
+/* A simple stylesheet for the Textual TUI */
+
+TaskListScreen {
+    /* Add a border and some padding to the main task list */
+    border: round white;
+    padding: 1;
+}
+
+TaskDetailScreen {
+    /* Add a border to the log view */
+    border: round dodgerblue;
+}
+
+DataTable {
+    /* Make the table fill the available space */
+    width: 100%;
+    height: 100%;
+}
+
+Log {
+    /* Make the log view fill the available space */
+    width: 100%;
+    height: 100%;
+}

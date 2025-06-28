@@ -1,11 +1,8 @@
 import pytest
-from src.agent_manager import _extract_json_from_response
 import json
+from src.agent_manager import _extract_json_from_response
 
 # Test cases simulating various faulty AI responses.
-# These are constructed by joining lists of strings to avoid triple-quote issues.
-
-# 1. Standard response with markdown fences
 case_1 = "\n".join([
     "```json",
     "{",
@@ -14,8 +11,6 @@ case_1 = "\n".join([
     "}",
     "```"
 ])
-
-# 2. Response with leading newlines and whitespace before the fence
 case_2 = "\n".join([
     "",
     "  ```json",
@@ -25,16 +20,12 @@ case_2 = "\n".join([
     "}",
     "```"
 ])
-
-# 3. Response with no markdown fence, just the JSON object
 case_3 = "\n".join([
     "{",
     '    "thought": "Response with no markdown fence.",',
     '    "tool_call": "some_tool"',
     "}"
 ])
-
-# 4. Response with text before and after the JSON fence
 case_4 = "\n".join([
     "Here is the JSON you requested:",
     "```json",
@@ -45,8 +36,6 @@ case_4 = "\n".join([
     "```",
     "I hope this helps!"
 ])
-
-# 5. The exact failure case: leading newline inside the fence
 case_5 = "\n".join([
     "```json",
     "",
@@ -70,14 +59,11 @@ def test_extract_json_from_response(response_text, expected_thought):
     """
     json_str = _extract_json_from_response(response_text)
     
-    # Assert that a string was actually extracted
     assert json_str is not None, f"Failed to extract JSON from: {response_text}"
     
-    # Try to parse the extracted string
     try:
         data = json.loads(json_str)
     except json.JSONDecodeError:
         pytest.fail(f"Extracted string is not valid JSON: {repr(json_str)}")
 
-    # Assert the content is correct
     assert data.get("thought") == expected_thought
