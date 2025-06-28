@@ -101,7 +101,6 @@ class TaskListScreen(Screen):
         original_task = task_manager.get_task(task_id)
         if original_task:
             new_task_id = task_manager.create_task(
-                # Fixed: Use the original_goal for cloning.
                 goal=original_task.get('original_goal', original_task['goal']),
                 max_steps=original_task['max_steps'],
                 allowed_tools=original_task['allowed_tools'],

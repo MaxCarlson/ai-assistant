@@ -1,6 +1,6 @@
 import subprocess
 import os
-import base64
+import sys
 import re
 import requests
 import json
@@ -24,7 +24,6 @@ def write_file(task_id: str, file_path: str, content: str) -> str:
     try:
         full_path = workspace_manager.get_safe_path(task_id, file_path)
         full_path.parent.mkdir(parents=True, exist_ok=True)
-        # Write in text mode, which is simpler and correct for code.
         with open(full_path, 'w', encoding='utf-8') as f:
             f.write(content)
         return f"Successfully wrote {len(content)} characters to {file_path}"

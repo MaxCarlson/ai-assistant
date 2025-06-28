@@ -46,7 +46,6 @@ class AgentManager:
             "3.  **CRITICAL:** If a tool returns an error, first use `read_file` to inspect the code. Then, for small corrections (like fixing a typo or one line of code), you MUST use the `modify_file` tool. Only use `write_file` to create a new file or if the file requires a complete rewrite.",
             "4.  **Pytest Note:** If you get a `ModuleNotFoundError` when running `run_pytest`, do not try to create `__init__.py` files. The tool handles the `PYTHONPATH` automatically. The error means your `import` statement is wrong in the test file. Use `read_file` and `modify_file` to fix the import.",
             "5.  When the goal is fully achieved, use the `task_complete` tool.",
-            "**Available Tools:**", tool_descriptions,
             "**Response Format:**",
             "You MUST respond with a single JSON object enclosed in ```json ... ```. The `content` argument for `write_file` must be a valid JSON string. This means all newline characters within the code MUST be escaped as `\\n`.",
             f"""**Example for `write_file`:**
@@ -131,7 +130,6 @@ class AgentManager:
                         tool_func = tool_manager.TOOLS[tool_name]
                         tool_args = tool_call.get("args", {})
                         
-                        # Fixed: Only add task_id if the tool's signature includes it.
                         sig = inspect.signature(tool_func)
                         if 'task_id' in sig.parameters:
                             tool_args['task_id'] = task_id
