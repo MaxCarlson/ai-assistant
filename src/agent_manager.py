@@ -4,6 +4,8 @@ import requests
 import os
 import re
 import inspect
+import difflib
+from pathlib import Path
 from typing import Dict, Any, Optional, List
 from queue import Queue
 from src import workspace_manager, tool_manager, task_manager
@@ -33,19 +35,31 @@ class AgentManager:
             raise ValueError("GOOGLE_API_KEY_AI_ASSISTANT environment variable not set.")
         self.api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={self.api_key}"
 
-    def _get_system_prompt(self, goal: str, history: str, allowed_tools: List[str]) -> str:
-        """Builds the system prompt dynamically based on the allowed tools."""
+    def _get_system_prompt(self, goal: str, history: str, allowed_tools: List[str], context_summary: str) -> str:
+        """Builds the system prompt dynamically based on the allowed tools and context."""
         tool_descriptions = tool_manager.get_tool_descriptions(allowed_tools)
         
         prompt_parts = [
             "You are an expert-level autonomous software engineer agent. Your goal is to solve the user's request by writing and modifying code.",
             "**Your Goal:**", goal,
+        ]
+
+        if context_summary:
+            prompt_parts.extend([
+                "**Context Files Provided by User:**",
+                "---",
+                context_summary,
+                "---"
+            ])
+
+        prompt_parts.extend([
             "**Your Thought Process & Self-Correction:**",
-            "1.  Analyze the user's goal and the available tools.",
+            "1.  Analyze the user's goal and the provided context files.",
             "2.  If the goal is ambiguous, you MUST use `request_user_input` immediately.",
             "3.  **CRITICAL:** If a tool returns an error, first use `read_file` to inspect the code. Then, for small corrections (like fixing a typo or one line of code), you MUST use the `modify_file` tool. Only use `write_file` to create a new file or if the file requires a complete rewrite.",
             "4.  **Pytest Note:** If you get a `ModuleNotFoundError` when running `run_pytest`, do not try to create `__init__.py` files. The tool handles the `PYTHONPATH` automatically. The error means your `import` statement is wrong in the test file. Use `read_file` and `modify_file` to fix the import.",
             "5.  When the goal is fully achieved, use the `task_complete` tool.",
+            "**Available Tools:**", tool_descriptions,
             "**Response Format:**",
             "You MUST respond with a single JSON object enclosed in ```json ... ```. The `content` argument for `write_file` must be a valid JSON string. This means all newline characters within the code MUST be escaped as `\\n`.",
             f"""**Example for `write_file`:**
@@ -64,8 +78,37 @@ class AgentManager:
 ```""",
             f"**Conversation History (Previous Steps):**\n{history}",
             "\nNow, begin. What is your next step?"
-        ]
+        ])
         return "\n\n".join(prompt_parts)
+
+    def _ingest_context(self, task_id: str) -> str:
+        """Reads context files and returns a summary string for the prompt."""
+        task = task_manager.get_task(task_id)
+        context_paths = task.get("context_paths", [])
+        if not context_paths:
+            return ""
+
+        summary_parts = []
+        for path_str in context_paths:
+            path = Path(path_str).expanduser().resolve()
+            if path.is_file():
+                try:
+                    content = path.read_text(encoding='utf-8')
+                    summary_parts.append(f"### File: {path_str}\n\n```\n{content}\n```")
+                except Exception as e:
+                    summary_parts.append(f"### Error reading file: {path_str}\n\n{e}")
+            elif path.is_dir():
+                for root, _, files in os.walk(path):
+                    for file in files:
+                        file_path = Path(root) / file
+                        try:
+                            rel_path = file_path.relative_to(path.parent)
+                            content = file_path.read_text(encoding='utf-8')
+                            summary_parts.append(f"### File: {rel_path}\n\n```\n{content}\n```")
+                        except Exception as e:
+                            summary_parts.append(f"### Error reading file: {file_path}\n\n{e}")
+        
+        return "\n\n".join(summary_parts)
 
     def start_task(self, task_id: str, notification_queue: Optional[Queue] = None):
         workspace_manager.create_workspace(task_id)
@@ -85,6 +128,8 @@ class AgentManager:
                 notification_queue.put(f"[Task {task_id}] {message}")
             else:
                 print(f"[Task {task_id}] {message}")
+        
+        context_summary = self._ingest_context(task_id)
 
         max_steps = task.get("max_steps", 15)
         try:
@@ -94,7 +139,7 @@ class AgentManager:
                 current_task_state = task_manager.get_task(task_id)
                 history_str = "\n".join(current_task_state["history"])
                 prompt_text = self._get_system_prompt(
-                    current_task_state["goal"], history_str, current_task_state["allowed_tools"]
+                    current_task_state["goal"], history_str, current_task_state["allowed_tools"], context_summary
                 ).replace("CURRENT_TASK_ID", task_id)
                 
                 payload = {"contents": [{"parts": [{"text": prompt_text}]}]}
@@ -138,8 +183,8 @@ class AgentManager:
                             task_manager.update_task_status(task_id, 'pending_input')
                         
                         result = tool_func(**tool_args)
-                        notify(f"Tool Result: {result}")
                         task_manager.log_to_task(task_id, f"Tool Result: {result}")
+                        notify(f"Tool Result: {result}")
 
                         if tool_name == 'task_complete':
                             task_manager.update_task_status(task_id, "completed_by_agent")
