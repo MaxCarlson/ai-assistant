@@ -22,7 +22,7 @@ def write_file(task_id: str, file_path: str, content: str) -> str:
     if task_id is None:
         return "Error: task_id is a required argument for write_file."
     try:
-        full_path = workspace_manager.get_safe_path(task_id, file_path, write_access_required=True)
+        full_path = workspace_manager.get_safe_path(task_id, file_path)
         full_path.parent.mkdir(parents=True, exist_ok=True)
         with open(full_path, 'w', encoding='utf-8') as f:
             f.write(content)
@@ -61,13 +61,14 @@ def modify_file(task_id: str, file_path: str, changes: List[Dict[str, Any]]) -> 
     if task_id is None:
         return "Error: task_id is a required argument for modify_file."
     try:
-        full_path = workspace_manager.get_safe_path(task_id, file_path, write_access_required=True)
+        full_path = workspace_manager.get_safe_path(task_id, file_path)
         if not full_path.exists():
             return f"Error: File '{file_path}' not found."
         
         with open(full_path, 'r', encoding='utf-8') as f:
             lines = f.readlines()
 
+        # Note: line numbers are 1-based for the agent, but list indices are 0-based.
         for change in changes:
             action = change.get("action")
             if action == "replace":
@@ -128,6 +129,7 @@ def run_pytest(task_id: str, args: Optional[List[str]] = None) -> str:
         
         command = ["pytest"] + (args or [])
 
+        # Check for coverage flag and try to install if needed
         if any(arg.startswith('--cov') for arg in (args or [])):
             try:
                 import pytest_cov

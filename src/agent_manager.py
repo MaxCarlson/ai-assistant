@@ -4,13 +4,15 @@ import requests
 import os
 import re
 import inspect
-import subprocess
 from typing import Dict, Any, Optional, List
 from queue import Queue
 from src import workspace_manager, tool_manager, task_manager
 
 def _extract_json_from_response(text: str) -> Optional[str]:
-    """Robustly extracts a JSON string from the AI's response."""
+    """
+    Robustly extracts a JSON string from the AI's response.
+    This is now a module-level function for easier testing.
+    """
     fence_match = re.search(r'```json\s*(\{.*?\})\s*```', text, re.DOTALL)
     if fence_match:
         return fence_match.group(1).strip()
@@ -36,15 +38,14 @@ class AgentManager:
         tool_descriptions = tool_manager.get_tool_descriptions(allowed_tools)
         
         prompt_parts = [
-            "You are an expert-level autonomous software engineer agent. Your goal is to solve the user's request by writing and modifying code within a git repository.",
+            "You are an expert-level autonomous software engineer agent. Your goal is to solve the user's request by writing and modifying code.",
             "**Your Goal:**", goal,
             "**Your Thought Process & Self-Correction:**",
-            "1.  You are working inside a git repository. You do not need to clone it. You can read any file.",
+            "1.  Analyze the user's goal and the available tools.",
             "2.  If the goal is ambiguous, you MUST use `request_user_input` immediately.",
             "3.  **CRITICAL:** If a tool returns an error, first use `read_file` to inspect the code. Then, for small corrections (like fixing a typo or one line of code), you MUST use the `modify_file` tool. Only use `write_file` to create a new file or if the file requires a complete rewrite.",
             "4.  **Pytest Note:** If you get a `ModuleNotFoundError` when running `run_pytest`, do not try to create `__init__.py` files. The tool handles the `PYTHONPATH` automatically. The error means your `import` statement is wrong in the test file. Use `read_file` and `modify_file` to fix the import.",
             "5.  When the goal is fully achieved, use the `task_complete` tool.",
-            "**Available Tools:**", tool_descriptions,
             "**Response Format:**",
             "You MUST respond with a single JSON object enclosed in ```json ... ```. The `content` argument for `write_file` must be a valid JSON string. This means all newline characters within the code MUST be escaped as `\\n`.",
             f"""**Example for `write_file`:**
@@ -54,8 +55,9 @@ class AgentManager:
     "tool_call": {{
         "name": "write_file",
         "args": {{
-            "file_path": "src/new_feature.py",
-            "content": "def new_main():\\n    print('This is a new feature!')"
+            "task_id": "CURRENT_TASK_ID",
+            "file_path": "hello.py",
+            "content": "def main():\\n    print('Hello, World!')\\n\\nif __name__ == '__main__':\\n    main()"
         }}
     }}
 }}
@@ -66,21 +68,24 @@ class AgentManager:
         return "\n\n".join(prompt_parts)
 
     def start_task(self, task_id: str, notification_queue: Optional[Queue] = None):
+        workspace_manager.create_workspace(task_id)
+        
+        task = task_manager.get_task(task_id)
+        if not task:
+            if notification_queue:
+                notification_queue.put(f"[Agent Error] Task with ID '{task_id}' not found.")
+            else:
+                print(f"[Agent Error] Task with ID '{task_id}' not found.")
+            return
+
+        task_manager.update_task_status(task_id, "in_progress")
+        
         def notify(message: str):
             if notification_queue:
                 notification_queue.put(f"[Task {task_id}] {message}")
             else:
                 print(f"[Task {task_id}] {message}")
 
-        setup_message = workspace_manager.setup_workspace(task_id)
-        notify(setup_message)
-        if setup_message.startswith("Error"):
-            task_manager.update_task_status(task_id, "failed")
-            return
-
-        task = task_manager.get_task(task_id)
-        task_manager.update_task_status(task_id, "in_progress")
-        
         max_steps = task.get("max_steps", 15)
         try:
             current_step_count = len([h for h in task.get('history', []) if h.startswith('AI Response:')])
@@ -90,7 +95,7 @@ class AgentManager:
                 history_str = "\n".join(current_task_state["history"])
                 prompt_text = self._get_system_prompt(
                     current_task_state["goal"], history_str, current_task_state["allowed_tools"]
-                )
+                ).replace("CURRENT_TASK_ID", task_id)
                 
                 payload = {"contents": [{"parts": [{"text": prompt_text}]}]}
                 try:
@@ -133,16 +138,8 @@ class AgentManager:
                             task_manager.update_task_status(task_id, 'pending_input')
                         
                         result = tool_func(**tool_args)
-                        task_manager.log_to_task(task_id, f"Tool Result: {result}")
                         notify(f"Tool Result: {result}")
-
-                        # Auto-commit on successful file modification
-                        if tool_name in ["write_file", "modify_file"] and not result.startswith("Error"):
-                            workspace_path = workspace_manager.get_task_workspace(task_id)
-                            commit_message = f"Step {current_step_count}: Agent used {tool_name} on {tool_args.get('file_path')}"
-                            subprocess.run(["git", "add", "."], cwd=workspace_path)
-                            subprocess.run(["git", "commit", "-m", commit_message], cwd=workspace_path)
-                            notify(f"Committed changes to branch.")
+                        task_manager.log_to_task(task_id, f"Tool Result: {result}")
 
                         if tool_name == 'task_complete':
                             task_manager.update_task_status(task_id, "completed_by_agent")

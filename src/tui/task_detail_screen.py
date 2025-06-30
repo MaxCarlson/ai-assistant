@@ -31,7 +31,7 @@ def parse_history_to_steps(history: list[str]) -> list:
             steps.append({"type": "system", "content": line})
             i += 1
         elif line.startswith("AI Response:"):
-            step = {"type": "agent", "thought": None, "tool_call": None, "tool_result": None, "diff": None}
+            step = {"type": "agent", "thought": None, "tool_call": None, "tool_result": None}
             match = json_pattern.search(line)
             if match:
                 try:
@@ -42,23 +42,12 @@ def parse_history_to_steps(history: list[str]) -> list:
                     step["thought"] = "Error parsing JSON in AI Response."
             
             if (i + 1) < len(history) and history[i + 1].startswith("Tool Result:"):
-                result_line = history[i + 1][len("Tool Result:"):].strip()
-                try:
-                    # Try to parse the result as JSON for structured data (summary, diff)
-                    result_data = json.loads(result_line)
-                    step["tool_result"] = result_data.get("summary", result_line)
-                    step["diff"] = result_data.get("diff")
-                except json.JSONDecodeError:
-                    # Fallback for old, plain-text results
-                    step["tool_result"] = result_line
+                step["tool_result"] = history[i + 1][len("Tool Result:"):].strip()
                 i += 2
             else:
                 i += 1
             steps.append(step)
         else:
-            # Handle unstructured lines, like old error messages
-            if "Error processing step:" in line:
-                 steps.append({"type": "system", "content": line})
             i += 1
             
     return steps
@@ -227,13 +216,9 @@ class TaskDetailScreen(Screen):
                         console_content.append(Text.from_markup(f"[bold cyan]$> Tool Call:[/bold cyan]\n{tool_call_str}"))
 
                     if step.get("tool_result"):
-                        escaped_result = escape(str(step['tool_result']))
+                        escaped_result = escape(step['tool_result'])
                         console_content.append(Text.from_markup(f"\n[bold green]$> Tool Result:[/bold green]\n{escaped_result}"))
                     
-                    if step.get("diff"):
-                        console_content.append(Text.from_markup("\n[bold yellow]File Changes:[/bold yellow]\n"))
-                        console_content.append(Syntax(step["diff"], "diff", theme="monokai", word_wrap=True))
-
                     is_collapsed = self.collapsible_states.get(action_id, True)
                     children.append(
                         Collapsible(Static(Text.assemble(*console_content)), title="View Action & Result", id=action_id, collapsed=is_collapsed)
