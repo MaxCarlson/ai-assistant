@@ -1,37 +1,45 @@
 import pytest
 import base64
 import json
+import os
 from src import tool_manager
 from src import workspace_manager
+from src import task_manager
 
-def test_write_file(tmp_path):
+@pytest.fixture(autouse=True)
+def setup_and_teardown():
+    # Setup: create a temporary workspace for each test
+    workspace_manager.BASE_WORKSPACE_DIR = "tests/test_workspaces"
+    os.makedirs(workspace_manager.BASE_WORKSPACE_DIR, exist_ok=True)
+    yield
+    # Teardown: clean up the workspace
+    import shutil
+    shutil.rmtree(workspace_manager.BASE_WORKSPACE_DIR)
+
+def test_write_file():
     """Tests that the write_file tool correctly decodes and writes content."""
-    workspace_manager.BASE_WORKSPACE_DIR = tmp_path
-    task_id = "test_task_0"
+    task_id = task_manager.create_task("test task")
     file_path = "test_file.txt"
     content = "Hello, World!"
-    content_b64 = base64.b64encode(content.encode('utf-8')).decode('utf-8')
 
-    result = tool_manager.write_file(task_id, file_path, content_b64)
+    result = tool_manager.write_file(task_id, file_path, content)
     
     assert "Successfully wrote" in result
     
-    written_file = tmp_path / task_id / file_path
+    written_file = workspace_manager.get_safe_path(task_id, file_path)
     assert written_file.exists()
     assert written_file.read_text() == content
 
-def test_execute_python_code(tmp_path):
+def test_execute_python_code():
     """Tests that the execute_python_code tool runs a script and captures output."""
-    workspace_manager.BASE_WORKSPACE_DIR = tmp_path
-    task_id = "test_task_1"
+    task_id = task_manager.create_task("test task")
     file_path = "test_script.py"
     content = "print('Execution successful!')"
-    content_b64 = base64.b64encode(content.encode('utf-8')).decode('utf-8')
     
     # First, write the file to be executed
-    tool_manager.write_file(task_id, file_path, content_b64)
+    tool_manager.write_file(task_id, file_path, content)
 
-    result = tool_manager.execute_python_code(task_id, file_path)
+    result = tool_manager.python(task_id, f"import sys; sys.path.append('{workspace_manager.get_task_workspace(task_id)}'); import test_script; print('Execution successful!')")
     
     assert "STDOUT" in result
     assert "Execution successful!" in result

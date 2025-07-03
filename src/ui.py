@@ -86,13 +86,13 @@ def get_bottom_toolbar(agent_manager, agent_mode):
     agent_status = "on" if agent_mode else "off"
     
     return FormattedText([
-        ('class:toolbar.path', f"{cwd} ({branch})"),
-        ('class:toolbar.separator', ' | '),
+        ('class:toolbar.path', f"~/projects/ai-assistant ({branch})"),
+        ('class:toolbar.separator', ' '),
+        ('class:toolbar.sandbox', f"no sandbox (see /docs)"),
+        ('class:toolbar.separator', ' '),
         ('class:toolbar.model', f"{model}"),
-        ('class:toolbar.separator', ' | '),
-        ('class:toolbar.status', f"agent: {agent_status}"),
-        ('class:toolbar.separator', ' | '),
-        ('class:toolbar.status', f"sandbox: {sandbox_status}"),
+        ('class:toolbar.separator', ' '),
+        ('class:toolbar.status', f"({agent_status} agent)"),
     ])
 
 def start_chat_loop(agent, agent_manager=None, debug=False):
@@ -108,7 +108,14 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
     while True:
         try:
             toolbar = get_bottom_toolbar(agent_manager, agent.agent_mode)
-            user_input = session.prompt("\n\nYou: ", bottom_toolbar=toolbar, refresh_interval=0.5).strip()
+            user_input = session.prompt(
+                [
+                    ('class:prompt', '> '),
+                    ('class:input', ' Type your message or @path/to/file')
+                ],
+                bottom_toolbar=toolbar,
+                refresh_interval=0.5
+            ).strip()
             if not user_input:
                 continue
 
@@ -143,9 +150,41 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
                     continue
                 if user_input.lower() == "/models":
                     console.print("[bold]Available Models:[/bold]")
-                    console.print("  - gemini-1.5-pro-latest")
-                    console.print("  - gemini-1.5-flash-latest")
-                    console.print("  - gemini-1.0-pro")
+                    models = agent_manager.list_models()
+                    for model in models:
+                        console.print(f"  - {model.replace('models/', '')}")
+                    continue
+                if user_input.lower().startswith("/config"):
+                    parts = user_input.split()
+                    if len(parts) > 1:
+                        key = parts[1]
+                        if key in ["temperature", "top_p", "top_k", "max_output_tokens"]:
+                            if len(parts) > 2:
+                                value = parts[2]
+                                try:
+                                    if "." in value:
+                                        setattr(agent_manager, key, float(value))
+                                    else:
+                                        setattr(agent_manager, key, int(value))
+                                    console.print(f"[green]{key} set to {getattr(agent_manager, key)}[/green]")
+                                except ValueError:
+                                    console.print(f"[red]Invalid value for {key}[/red]")
+                            else:
+                                console.print(f"Current {key}: {getattr(agent_manager, key)}")
+                        elif key in ["grounding", "code_execution"]:
+                            current_value = getattr(agent_manager, key)
+                            setattr(agent_manager, key, not current_value)
+                            console.print(f"[green]{key} set to {getattr(agent_manager, key)}[/green]")
+                        else:
+                            console.print(f"[red]Unknown config key: {key}[/red]")
+                    else:
+                        console.print("[bold]Current Config:[/bold]")
+                        console.print(f"  - temperature: {agent_manager.temperature}")
+                        console.print(f"  - top_p: {agent_manager.top_p}")
+                        console.print(f"  - top_k: {agent_manager.top_k}")
+                        console.print(f"  - max_output_tokens: {agent_manager.max_output_tokens}")
+                        console.print(f"  - grounding: {agent_manager.grounding}")
+                        console.print(f"  - code_execution: {agent_manager.code_execution}")
                     continue
                 if user_input.lower() == "/help":
                     console.print("[bold]Input Mode:[/bold]")
@@ -158,6 +197,7 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
                     console.print("  /agent                   - Toggle agent mode.")
                     console.print("  /model <model_name>      - Switch the model.")
                     console.print("  /models                  - List available models.")
+                    console.print("  /config [key] [value]    - View or set model configuration.")
                     console.print("  /tasks                   - Instructions to open the interactive task viewer TUI.")
                     console.print("  /task_list               - List all tasks and their status.")
                     console.print("  /do <goal>               - Create and immediately start a new agent task.")

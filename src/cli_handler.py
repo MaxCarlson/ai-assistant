@@ -63,6 +63,7 @@ def run_cli():
     parser.add_argument("--top-k", type=int, default=40, help="Set the top-k for the model.")
     parser.add_argument("--max-output-tokens", type=int, default=1024, help="Set the maximum number of output tokens.")
     parser.add_argument("--grounding", action="store_true", help="Enable Google Search grounding.")
+    parser.add_argument("--code-execution", action="store_true", help="Enable code execution.")
     args = parser.parse_args()
 
     try:
@@ -74,7 +75,8 @@ def run_cli():
             top_p=args.top_p,
             top_k=args.top_k,
             max_output_tokens=args.max_output_tokens,
-            grounding=args.grounding
+            grounding=args.grounding,
+            code_execution=args.code_execution
         )
         task_id = task_manager.create_task("Chat with user.")
         conversational_agent = CLIAgent(agent_manager=agent_manager, task_id=task_id, agent_mode=args.agent)
