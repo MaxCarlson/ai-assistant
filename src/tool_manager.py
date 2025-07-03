@@ -223,7 +223,7 @@ def request_user_input(task_id: str, question: str) -> str:
     """
     return f"Task paused. User was asked: {question}"
 
-def task_complete(task_id: str, reason: str) -> str:
+def task_complete(task_id: str, reason: str, data: Optional[str] = None, last_tool_output: Optional[str] = None) -> str:
     """
     Marks the current task as complete. Call this tool ONLY when the user's request has been fully satisfied.
 
@@ -233,8 +233,45 @@ def task_complete(task_id: str, reason: str) -> str:
     Args:
         task_id (str): The ID of the current task.
         reason (str): A brief, one-sentence summary of how you completed the task.
+        data (Optional[str]): A string containing any final data to be returned to the user (e.g., a code block).
+        last_tool_output (Optional[str]): The output of the last tool that was run.
     """
-    return f"Task marked as complete by the agent. Reason: {reason}"
+    response = f"Task marked as complete by the agent. Reason: {reason}"
+    if data:
+        response += f"\n\n{data}"
+    elif last_tool_output:
+        response += f"\n\n{last_tool_output}"
+    return response
+
+
+
+def run_shell_command(task_id: str, command: str) -> str:
+    """
+    Executes an arbitrary shell command in the task's workspace.
+
+    CRITICAL: This tool is powerful and can have unintended consequences.
+    Use it with caution. It is best used for simple commands like `ls`, `cat`, or `echo`.
+    For more complex operations, consider using more specific tools.
+
+    Args:
+        task_id (str): The ID of the current task.
+        command (str): The shell command to execute.
+    """
+    if task_id is None:
+        return "Error: task_id is a required argument for run_shell_command."
+    try:
+        workspace_dir = workspace_manager.get_task_workspace(task_id)
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=workspace_dir
+        )
+        return f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    except Exception as e:
+        return f"Error executing shell command: {e}"
 
 # --- Tool Registry ---
 
@@ -247,6 +284,7 @@ TOOLS: Dict[str, Callable] = {
     "web_search": web_search,
     "request_user_input": request_user_input,
     "task_complete": task_complete,
+    "run_shell_command": run_shell_command,
 }
 
 def get_tool_descriptions(allowed_tools: List[str]) -> str:

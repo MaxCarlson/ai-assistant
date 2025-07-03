@@ -6,7 +6,7 @@ from src import tool_manager
 TASKS_FILE = Path("tasks.json")
 
 # Define a set of essential tools the agent ALWAYS needs to function.
-CORE_TOOLS = {"write_file", "read_file", "request_user_input", "task_complete"}
+CORE_TOOLS = {"write_file", "read_file", "request_user_input", "task_complete", "run_shell_command"}
 
 def _load_tasks() -> Dict[str, Any]:
     """Loads the tasks from the JSON file."""

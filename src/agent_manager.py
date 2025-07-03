@@ -26,11 +26,16 @@ def _extract_json_from_response(text: str) -> Optional[str]:
 
 class AgentManager:
     def __init__(self, model_name="gemini-1.5-pro", debug: bool = False):
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+        except ImportError:
+            print("python-dotenv not found. Please install it with 'pip install python-dotenv'")
         self.model_name = model_name
         self.debug = debug
-        self.api_key = os.getenv('GOOGLE_API_KEY_AI_ASSISTANT')
+        self.api_key = os.getenv('GEMINI_API_KEY')
         if not self.api_key:
-            raise ValueError("GOOGLE_API_KEY_AI_ASSISTANT environment variable not set.")
+            raise ValueError("GEMINI_API_KEY environment variable not set.")
         self.api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={self.api_key}"
 
     def _get_system_prompt(self, goal: str, history: str, allowed_tools: List[str]) -> str:
@@ -38,19 +43,22 @@ class AgentManager:
         tool_descriptions = tool_manager.get_tool_descriptions(allowed_tools)
         
         prompt_parts = [
-            "You are an expert-level autonomous software engineer agent. Your primary goal is to solve the user's request by using the available tools to write, read, and modify code.",
+            "You are an expert-level autonomous software engineer agent. Your primary goal is to solve the user's request. You have access to a variety of tools for writing, reading, and modifying code.",
             "**Your Goal:", goal,
             
-            "**Core Principles:",
+            "**Guiding Principles:",
             "1.  **Analyze and Plan:** Carefully analyze the user's goal and the conversation history. Form a step-by-step plan before acting.",
             "2.  **One Step at a Time:** Execute one single, logical step at a time. Do not try to combine multiple actions in one tool call.",
             "3.  **Self-Correction is Key:** This is the most important principle. If a tool returns an error or unexpected output, you MUST analyze the error and attempt to correct your course of action. Do not repeat the same failed command. Use `read_file` to investigate, then `modify_file` or `write_file` to fix the issue.",
             "4.  **Be Methodical:** If a file doesn't exist, don't assume you can create it. First, use `ls -R` to understand the directory structure. If a command fails, read the error message carefully to understand why.",
 
-            "**Tool Usage Rules:",
-            "- If the user's goal is ambiguous, you MUST use `request_user_input` immediately to ask for clarification.",
-            "- To prevent infinite loops, if you find yourself repeating the same action multiple times with the same error, you must stop and use `request_user_input` to ask the user for help.",
-            "- When the goal is fully achieved and verified, use the `task_complete` tool to finish the task.",
+            "**Tool Usage Strategy:",
+            "- **Direct Output vs. File Operations:**",
+            "  - If the user asks for a piece of information, a simple code snippet, or a direct answer, you should provide it directly using the `task_complete` tool with the `data` parameter. **Do not write a file unless the user explicitly asks for it or it's a necessary step in a larger coding task.**",
+            "  - For complex tasks that require creating or modifying multiple files, building a project, or running tests, you should use the file system tools (`write_file`, `modify_file`, `run_pytest`, etc.).",
+            "- **Clarification:** If the user's goal is ambiguous, you MUST use `request_user_input` immediately to ask for clarification.",
+            "- **Infinite Loops:** To prevent infinite loops, if you find yourself repeating the same action multiple times with the same error, you must stop and use `request_user_input` to ask the user for help.",
+            "- **Completion:** When the goal is fully achieved and verified, use the `task_complete` tool to finish the task.",
 
             "**Available Tools:",
             tool_descriptions,
@@ -58,19 +66,32 @@ class AgentManager:
             "**Response Format:",
             "You MUST respond with a single JSON object enclosed in ```json ... ```. Your response must contain your internal monologue ('thought') and the specific tool call you want to execute.",
             
-            f"""**Example Response:**
+            f"""**Example Response (Direct Output):
 ```json
 {{
-    "thought": "I need to see what files are in the current directory to understand the project structure. I will use the `list_directory` tool for this.",
+    "thought": "The user wants a simple 'hello world' in Python. I will provide it directly using the `task_complete` tool.",
     "tool_call": {{
-        "name": "list_directory",
+        "name": "task_complete",
         "args": {{
-            "path": "."
+            "reason": "Provided the user with the requested Python snippet.",
+            "data": "```python\nprint('Hello, World!')\n```"
         }}
     }}
 }}
 ```""",
-            f"**Conversation History (Previous Steps):**\n{history}",
+            f"""**Example Response (File Operation):
+```json
+{{
+    "thought": "I need to see what files are in the current directory to understand the project structure. I will use the `run_shell_command` tool for this.",
+    "tool_call": {{
+        "name": "run_shell_command",
+        "args": {{
+            "command": "ls -F"
+        }}
+    }}
+}}
+```""",
+            f"**Conversation History (Previous Steps):\n{history}",
             "\nNow, based on the goal and history, what is your next single step? Your response must be a JSON object."
         ]
         return "\n\n".join(prompt_parts)
@@ -141,6 +162,11 @@ class AgentManager:
                         if 'task_id' in sig.parameters:
                             tool_args['task_id'] = task_id
                         
+                        if tool_name == 'task_complete' and 'last_tool_output' in sig.parameters:
+                            last_observation = next((item for item in reversed(task_manager.get_task(task_id)['history']) if item.startswith("Observation:")), None)
+                            if last_observation:
+                                tool_args['last_tool_output'] = last_observation.replace("Observation: ", "")
+
                         # This is the crucial change: wrap tool execution in a try-except block
                         try:
                             tool_result = tool_func(**tool_args)
@@ -161,7 +187,7 @@ class AgentManager:
 
                 except (json.JSONDecodeError, ValueError, KeyError) as e:
                     tool_result = f"Error processing AI response: {e}. The response was not valid JSON with 'thought' and 'tool_call'. You must correct your response format."
-                    notify(f"[bold red]{tool_result}[/bold red]")
+                    notify(f"Agent is self-correcting due to a response formatting error...")
                 
                 # Log the observation for the next loop
                 task_manager.log_to_task(task_id, f"Observation: {tool_result}")
@@ -174,7 +200,6 @@ class AgentManager:
 
             if task_manager.get_task(task_id)["status"] == "in_progress":
                 task_manager.update_task_status(task_id, "completed_max_steps")
-
         except Exception as e:
             import traceback
             error_msg = f"A critical error occurred in the agent loop: {e}\n{traceback.format_exc()}"

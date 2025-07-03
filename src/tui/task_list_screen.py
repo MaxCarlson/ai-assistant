@@ -18,8 +18,9 @@ class TaskListScreen(Screen):
         Binding("d", "delete_task", "Delete Task"),
     ]
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, agent_manager, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.agent_manager = agent_manager
         self.notification_queue = Queue()
 
     def compose(self):
@@ -39,15 +40,19 @@ class TaskListScreen(Screen):
         """Checks the queue for messages from agent threads and displays them."""
         try:
             message = self.notification_queue.get_nowait()
-            self.sub_title = message
+            # Check if the message is a thought
+            if "AI Thought:" in message:
+                thought = message.split("AI Thought:")[1].strip()
+                self.sub_title = f"[yellow]Thought: {thought}[/yellow]"
+            else:
+                self.sub_title = message
         except Empty:
             pass
 
     def _start_task_in_background(self, task: Dict[str, Any]):
         """Helper method to start an agent task in a new thread with a notification queue."""
-        agent = agent_manager.AgentManager(debug=True)
         # Pass the entire task dictionary to avoid race conditions
-        task_thread = threading.Thread(target=agent.start_task, args=(task, self.notification_queue))
+        task_thread = threading.Thread(target=self.agent_manager.start_task, args=(task, self.notification_queue))
         task_thread.start()
         self.sub_title = f"Task {task['id']} started/resumed in background"
 

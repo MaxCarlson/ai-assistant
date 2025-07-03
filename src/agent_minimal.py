@@ -1,60 +1,51 @@
-import os
-import requests
+import subprocess
+import json
 from src.base_agent import BaseAgent
 
 class MinimalAgent(BaseAgent):
     """
-    A minimal agent that interacts directly with the Gemini REST API using 'requests'.
+    A minimal agent that interacts with the Gemini CLI.
     It is stateless and sends the entire conversation history with each call.
     Designed for maximum portability in environments like Termux.
     """
     def __init__(self, model_name="gemini-2.5-pro"):
         self.model_name = model_name
-        self.api_key = os.getenv('GOOGLE_API_KEY_AI_ASSISTANT')
-        if not self.api_key:
-            raise ValueError("GOOGLE_API_KEY_AI_ASSISTANT environment variable not set.")
-        self.api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={self.api_key}"
 
-    def _format_history_for_api(self, conversation_history: list) -> list:
+    def handle_task(self, user_input: str, conversation_history: list) -> dict:
         """
-        Transforms the internal history format to the Gemini REST API format.
-        Maps the 'assistant' role to 'model'.
+        Sends the user input and conversation history to the Gemini CLI
+        and returns the response as a dictionary with 'thought' and 'response'.
         """
-        api_history = []
+        prompt = "You are a helpful assistant. Please provide a thoughtful response."
+        prompt += "\n\n---\n\n"
         for entry in conversation_history:
-            # The API expects 'user' and 'model' roles.
-            role = "model" if entry["role"] == "assistant" else "user"
-            api_history.append({"role": role, "parts": [{"text": entry["content"]}]})
-        return api_history
+            prompt += f"{entry['role']}: {entry['content']['response'] if isinstance(entry['content'], dict) else entry['content']}\n"
+        prompt += f"user: {user_input}"
 
-    def handle_task(self, user_input: str, conversation_history: list) -> str:
-        """
-        Sends the user input and conversation history to the Gemini REST API
-        and returns the response.
-        """
-        contents = self._format_history_for_api(conversation_history)
-        contents.append({"role": "user", "parts": [{"text": user_input}]})
-
-        payload = {"contents": contents}
+        command = [
+            "gemini",
+            "-m",
+            self.model_name,
+            "-p",
+            prompt,
+        ]
 
         try:
-            response = requests.post(self.api_url, json=payload, timeout=120)
-            response.raise_for_status()
-            data = response.json()
-
-            if 'candidates' in data and data['candidates']:
-                candidate = data['candidates'][0]
-                if candidate.get('finishReason') == 'SAFETY':
-                    return "[Error] The response was blocked due to safety settings."
-                
-                content = candidate.get('content', {})
-                parts = content.get('parts', [])
-                if parts:
-                    return parts[0].get('text', "[Error] No text found in response part.")
-
-            return f"[Error] Could not parse a valid response from API. Response: {data}"
-
-        except requests.exceptions.RequestException as e:
-            return f"[Network Error] Failed to connect to Gemini API: {e}"
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=120
+            )
+            response_text = result.stdout.strip()
+            # For the minimal agent, we'll just put the response in both fields
+            return {"thought": "Thinking...", "response": response_text}
+        except FileNotFoundError:
+            return {"thought": "Error", "response": "[Error] 'gemini' command not found. Make sure the Gemini CLI is installed and in your PATH."}
+        except subprocess.CalledProcessError as e:
+            return {"thought": "Error", "response": f"[Error] The gemini CLI returned a non-zero exit code {e.returncode}.\nStderr: {e.stderr}"}
+        except subprocess.TimeoutExpired:
+            return {"thought": "Error", "response": "[Error] The gemini CLI command timed out."}
         except Exception as e:
-            return f"[Error] An unexpected error occurred: {e}"
+            return {"thought": "Error", "response": f"[Error] An unexpected error occurred: {e}"}

@@ -9,8 +9,6 @@ from rich.syntax import Syntax
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
 from src import task_manager
-# The TUI import is removed to decouple the chat UI from the TUI application
-# from src.tui_app import TUI
 
 console = Console()
 last_code_block = None
@@ -64,6 +62,10 @@ def format_and_print_response(response_text):
     if last_code_block:
         console.print("\n[dim]Type '/copy' to copy the last code block to the clipboard.[/dim]")
 
+def format_and_print_thought(thought_text):
+    """Processes the AI thought, detecting and formatting Markdown and code blocks."""
+    console.print(Panel(Markdown(thought_text), title="Thought", border_style="yellow", expand=False))
+
 def start_chat_loop(agent, agent_manager=None, debug=False):
     """Handles the interactive AI chat session with command history and async tasks."""
     conversation_history = []
@@ -102,7 +104,6 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
                     continue
 
                 if user_input.lower() == "/tasks":
-                    # Fixed: Instruct the user instead of trying to run the TUI from here.
                     console.print("\n[bold yellow]To open the Task Manager TUI, please exit the chat and run:[/bold yellow]")
                     console.print("  [cyan]python src/cli.py view[/cyan]\n")
                     continue
@@ -111,7 +112,8 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
                     goal = user_input[len("/do "):].strip()
                     task_id = task_manager.create_task(goal)
                     console.print(f"[green]✅ Task '{task_id}' created. Starting in background...[/green]")
-                    task_thread = threading.Thread(target=agent_manager.start_task, args=(task_id, notification_queue))
+                    task = task_manager.get_task(task_id)
+                    task_thread = threading.Thread(target=agent_manager.start_task, args=(task, notification_queue))
                     task_thread.start()
                     continue
                 
@@ -125,7 +127,7 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
                     if task and task['status'] == 'pending_input':
                         task_manager.log_to_task(task_id, f"User Input: {user_response}")
                         console.print(f"[yellow]🚀 Resuming task '{task_id}' with your input...[/yellow]")
-                        task_thread = threading.Thread(target=agent_manager.start_task, args=(task_id, notification_queue))
+                        task_thread = threading.Thread(target=agent_manager.start_task, args=(task, notification_queue))
                         task_thread.start()
                     else:
                         console.print(f"[red]Error: Task {task_id} not found or not awaiting input.[/red]")
@@ -145,10 +147,18 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
 
             # Regular chat logic
             console.print("[yellow]Assistant is thinking...[/yellow]", end="\r")
-            response_text = agent.handle_task(user_input, conversation_history)
+            response_data = agent.handle_task(user_input, conversation_history)
             console.print(" " * 25, end="\r")
+            
+            thought = response_data.get("thought", "")
+            response_text = response_data.get("response", "")
+
             conversation_history.append({"role": "user", "content": user_input})
-            conversation_history.append({"role": "assistant", "content": response_text})
+            conversation_history.append({"role": "assistant", "content": response_data})
+            
+            if thought:
+                console.print(f"[dim yellow]Thought: {thought}[/dim yellow]")
+
             console.print("\n[bold magenta]Assistant:[/bold magenta]")
             format_and_print_response(response_text)
 

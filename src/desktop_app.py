@@ -1,6 +1,5 @@
 import argparse
-from src.agent_full import RAGAgent
-from src.agent_manager import AgentManager
+from src.termux_app import CLIAgent
 from src.ui import start_chat_loop, console
 
 def main():
@@ -12,10 +11,9 @@ def main():
     args = parser.parse_args()
 
     try:
-        # This app uses the RAGAgent
-        conversational_agent = RAGAgent()
-        agent_manager = AgentManager(debug=args.debug)
-        start_chat_loop(agent=conversational_agent, agent_manager=agent_manager, debug=args.debug)
+        # This app uses the CLIAgent
+        conversational_agent = CLIAgent()
+        start_chat_loop(agent=conversational_agent, agent_manager=None, debug=args.debug)
     except Exception as e:
         console.print(f"[bold red]Initialization Error: {e}[/bold red]")
         console.print("[yellow]Hint: Ensure you have installed all dependencies for the RAG agent (e.g., langchain, faiss-cpu, etc.)[/yellow]")

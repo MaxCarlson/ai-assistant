@@ -39,7 +39,8 @@ def handle_list(args):
 
 def handle_view(args):
     """Handles the 'view' command by launching the TUI."""
-    app = TUI() # Corrected: Instantiate the class directly
+    agent = agent_manager.AgentManager(debug=args.debug)
+    app = TUI(agent_manager=agent) # Corrected: Instantiate the class directly
     app.run()
 
 def main():
