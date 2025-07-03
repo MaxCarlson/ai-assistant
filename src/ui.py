@@ -1,7 +1,6 @@
 import re
 import pyperclip
-import threading
-import queue
+import asyncio
 import os
 import subprocess
 from rich.console import Console
@@ -11,34 +10,18 @@ from rich.syntax import Syntax
 from rich.text import Text
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
+from prompt_toolkit.key_binding import KeyBindings
 from src import task_manager, workspace_manager
 
 console = Console()
 last_code_block = None
-notification_queue = queue.Queue()
+queued_input = None
 
 def _get_git_branch():
     try:
         return subprocess.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD']).strip().decode('utf-8')
     except Exception:
         return "not a git repo"
-
-def _print_notifications():
-    """A daemon thread function that prints messages from the notification queue."""
-    while True:
-        try:
-            message = notification_queue.get()
-            if message is None: # Sentinel value to stop the thread
-                break
-            # Using print() here to avoid conflicts with prompt_toolkit's rendering
-            print(f"\n🔔 [dim yellow]{message}[/dim yellow]")
-            # This is a trick to redraw the prompt line after printing
-            session = PromptSession.get_app().current_buffer
-            if session:
-                session.redraw()
-        except Exception:
-            # If something goes wrong, just exit the thread silently.
-            break
 
 def copy_last_code_to_clipboard():
     """Copies the last detected code block to the clipboard."""
@@ -95,27 +78,48 @@ def get_bottom_toolbar(agent_manager, agent_mode):
         ('class:toolbar.status', f"({agent_status} agent)"),
     ])
 
-def start_chat_loop(agent, agent_manager=None, debug=False):
+async def start_chat_loop(agent, agent_manager=None, debug=False):
     """Handles the interactive AI chat session with command history and async tasks."""
+    global queued_input
     conversation_history = []
     session = PromptSession(history=InMemoryHistory())
     
-    notification_thread = threading.Thread(target=_print_notifications, daemon=True)
-    notification_thread.start()
-    
     console.print("[bold green]AI Assistant Initialized. Type '/exit' or '/help'.[/bold green]", justify="center")
+
+    bindings = KeyBindings()
+
+    @bindings.add('c-j')
+    def _(event):
+        global queued_input
+        queued_input = event.app.current_buffer.text
+        console.print(f"\n[yellow]Input queued: '{queued_input}'[/yellow]")
+        event.app.current_buffer.text = ""
+
+    @bindings.add('c-c')
+    def _(event):
+        global queued_input
+        if queued_input:
+            queued_input = None
+            console.print("\n[yellow]Queued input cancelled.[/yellow]")
+        else:
+            event.app.exit()
 
     while True:
         try:
             toolbar = get_bottom_toolbar(agent_manager, agent.agent_mode)
-            user_input = session.prompt(
-                [
-                    ('class:prompt', '> '),
-                    ('class:input', ' Type your message or @path/to/file')
-                ],
-                bottom_toolbar=toolbar,
-                refresh_interval=0.5
-            ).strip()
+            if queued_input:
+                user_input = queued_input
+                queued_input = None
+            else:
+                user_input = (await session.prompt_async(
+                    [
+                        ('class:prompt', '> '),
+                        ('class:input', ' Type your message or @path/to/file')
+                    ],
+                    bottom_toolbar=toolbar,
+                    key_bindings=bindings,
+                    refresh_interval=0.5
+                )).strip()
             if not user_input:
                 continue
 
@@ -188,7 +192,9 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
                     continue
                 if user_input.lower() == "/help":
                     console.print("[bold]Input Mode:[/bold]")
-                    console.print("  - Press [Esc] followed by [Enter] to create a newline.")
+                    console.print("  - Press [Enter] to send your message.")
+                    console.print("  - Press [Ctrl]+[Enter] to queue a command to run next.")
+                    console.print("  - Press [Ctrl]+[C] to cancel a queued command.")
                     console.print("[bold]Available Commands:[/bold]")
                     console.print("  /exit, /quit             - Exit the application.")
                     console.print("  /copy                    - Copy the last code block.")
@@ -215,8 +221,7 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
                     task_id = task_manager.create_task(goal)
                     console.print(f"[green]✅ Task '{task_id}' created. Starting in background...[/green]")
                     task = task_manager.get_task(task_id)
-                    task_thread = threading.Thread(target=agent_manager.start_task, args=(task, notification_queue))
-                    task_thread.start()
+                    asyncio.create_task(agent.handle_task(goal, conversation_history))
                     continue
                 
                 if user_input.lower().startswith("/provide_input "):
@@ -229,8 +234,7 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
                     if task and task['status'] == 'pending_input':
                         task_manager.log_to_task(task_id, f"User Input: {user_response}")
                         console.print(f"[yellow]🚀 Resuming task '{task_id}' with your input...[/yellow]")
-                        task_thread = threading.Thread(target=agent_manager.start_task, args=(task, notification_queue))
-                        task_thread.start()
+                        asyncio.create_task(agent.handle_task(user_response, conversation_history))
                     else:
                         console.print(f"[red]Error: Task {task_id} not found or not awaiting input.[/red]")
                         continue
@@ -249,7 +253,7 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
 
             # Regular chat logic
             console.print("[yellow]Assistant is thinking...[/yellow]", end="\r")
-            response_data = agent.handle_task(user_input, conversation_history)
+            response_data = await agent.handle_task(user_input, conversation_history)
             console.print(" " * 25, end="\r")
             
             thought = response_data.get("thought", "")
@@ -264,10 +268,9 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
             console.print("\n[bold magenta]Assistant:[/bold magenta]")
             format_and_print_response(response_text)
 
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, EOFError):
             break
         except Exception as e:
             console.print(f"[bold red]An unexpected error occurred in UI loop: {e}[/bold red]")
     
-    notification_queue.put(None) # Signal the notification thread to exit
     console.print("[bold red]\nExiting AI Assistant...[/bold red]")

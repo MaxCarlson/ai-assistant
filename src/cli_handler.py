@@ -52,6 +52,8 @@ class CLIAgent:
         else:
             return self.agent_manager.get_direct_response(user_input, conversation_history)
 
+import asyncio
+
 def run_cli():
     parser = argparse.ArgumentParser(description="AI Assistant CLI")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging.")
@@ -80,6 +82,6 @@ def run_cli():
         )
         task_id = task_manager.create_task("Chat with user.")
         conversational_agent = CLIAgent(agent_manager=agent_manager, task_id=task_id, agent_mode=args.agent)
-        start_chat_loop(agent=conversational_agent, agent_manager=agent_manager, debug=args.debug)
+        asyncio.run(start_chat_loop(agent=conversational_agent, agent_manager=agent_manager, debug=args.debug))
     except Exception as e:
         console.print(f"[bold red]Initialization Error: {e}[/bold red]")
