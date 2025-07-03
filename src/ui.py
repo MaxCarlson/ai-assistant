@@ -2,17 +2,26 @@ import re
 import pyperclip
 import threading
 import queue
+import os
+import subprocess
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.syntax import Syntax
+from rich.text import Text
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
-from src import task_manager
+from src import task_manager, workspace_manager
 
 console = Console()
 last_code_block = None
 notification_queue = queue.Queue()
+
+def _get_git_branch():
+    try:
+        return subprocess.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD']).strip().decode('utf-8')
+    except Exception:
+        return "not a git repo"
 
 def _print_notifications():
     """A daemon thread function that prints messages from the notification queue."""
@@ -66,6 +75,20 @@ def format_and_print_thought(thought_text):
     """Processes the AI thought, detecting and formatting Markdown and code blocks."""
     console.print(Panel(Markdown(thought_text), title="Thought", border_style="yellow", expand=False))
 
+from prompt_toolkit.formatted_text import FormattedText
+
+def get_bottom_toolbar(agent_manager):
+    """Generates the status bar text."""
+    cwd = os.path.basename(os.getcwd())
+    branch = _get_git_branch()
+    model = agent_manager.model_name
+    sandbox_status = "on" if workspace_manager.SANDBOX_ENABLED else "off"
+    return FormattedText([
+        ('bold blue', f"{cwd} ({branch})"),
+        ('', ' | '),
+        ('bold green', f"{model} (sandbox: {sandbox_status})"),
+    ])
+
 def start_chat_loop(agent, agent_manager=None, debug=False):
     """Handles the interactive AI chat session with command history and async tasks."""
     conversation_history = []
@@ -78,7 +101,8 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
 
     while True:
         try:
-            user_input = session.prompt("\n\nYou: ").strip()
+            toolbar = get_bottom_toolbar(agent_manager)
+            user_input = session.prompt("\n\nYou: ", bottom_toolbar=toolbar, refresh_interval=0.5).strip()
             if not user_input:
                 continue
 
@@ -92,11 +116,24 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
                     conversation_history.clear()
                     console.print("[yellow]🧹 Conversation history cleared.[/yellow]")
                     continue
+                if user_input.lower() == "/sandbox":
+                    workspace_manager.SANDBOX_ENABLED = not workspace_manager.SANDBOX_ENABLED
+                    status = "enabled" if workspace_manager.SANDBOX_ENABLED else "disabled"
+                    console.print(f"[green]Sandbox mode {status}.[/green]")
+                    continue
+                if user_input.lower().startswith("/agent"):
+                    agent.agent_mode = True
+                    console.print("[green]Agent mode enabled.[/green]")
+                    continue
                 if user_input.lower() == "/help":
+                    console.print("[bold]Input Mode:[/bold]")
+                    console.print("  - Press [Esc] followed by [Enter] to create a newline.")
                     console.print("[bold]Available Commands:[/bold]")
                     console.print("  /exit, /quit             - Exit the application.")
                     console.print("  /copy                    - Copy the last code block.")
                     console.print("  /clear                   - Clear the conversation history.")
+                    console.print("  /sandbox                 - Toggle sandbox mode.")
+                    console.print("  /agent                   - Enable agent mode.")
                     console.print("  /tasks                   - Instructions to open the interactive task viewer TUI.")
                     console.print("  /task_list               - List all tasks and their status.")
                     console.print("  /do <goal>               - Create and immediately start a new agent task.")
@@ -109,7 +146,8 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
                     continue
 
                 if user_input.lower().startswith("/do "):
-                    goal = user_input[len("/do "):].strip()
+                    goal = user_input[len("/do "):
+].strip()
                     task_id = task_manager.create_task(goal)
                     console.print(f"[green]✅ Task '{task_id}' created. Starting in background...[/green]")
                     task = task_manager.get_task(task_id)
@@ -131,7 +169,7 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
                         task_thread.start()
                     else:
                         console.print(f"[red]Error: Task {task_id} not found or not awaiting input.[/red]")
-                    continue
+                        continue
 
                 if user_input.lower() == "/task_list":
                     console.print("[bold]Tasks:[/bold]")
@@ -157,7 +195,7 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
             conversation_history.append({"role": "assistant", "content": response_data})
             
             if thought:
-                console.print(f"[dim yellow]Thought: {thought}[/dim yellow]")
+                format_and_print_thought(thought)
 
             console.print("\n[bold magenta]Assistant:[/bold magenta]")
             format_and_print_response(response_text)

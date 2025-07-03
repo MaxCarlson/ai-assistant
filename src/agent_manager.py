@@ -25,7 +25,7 @@ def _extract_json_from_response(text: str) -> Optional[str]:
     return None
 
 class AgentManager:
-    def __init__(self, model_name="gemini-1.5-pro", debug: bool = False):
+    def __init__(self, model_name="gemini-1.5-pro", debug: bool = False, sandbox: bool = False):
         try:
             from dotenv import load_dotenv
             load_dotenv()
@@ -33,6 +33,7 @@ class AgentManager:
             print("python-dotenv not found. Please install it with 'pip install python-dotenv'")
         self.model_name = model_name
         self.debug = debug
+        self.sandbox = sandbox
         self.api_key = os.getenv('GEMINI_API_KEY')
         if not self.api_key:
             raise ValueError("GEMINI_API_KEY environment variable not set.")
@@ -95,6 +96,23 @@ class AgentManager:
             "\nNow, based on the goal and history, what is your next single step? Your response must be a JSON object."
         ]
         return "\n\n".join(prompt_parts)
+
+    def get_direct_response(self, user_input: str, conversation_history: list) -> str:
+        """Gets a direct response from the model without using tools."""
+        prompt = ""
+        for entry in conversation_history:
+            prompt += f"{entry['role']}: {entry['content']}\n"
+        prompt += f"user: {user_input}"
+
+        payload = {"contents": [{"parts": [{"text": prompt}]}]}
+        try:
+            response = requests.post(self.api_url, json=payload, timeout=120)
+            response.raise_for_status()
+            data = response.json()
+            response_content = data.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+            return {"thought": "Direct response", "response": response_content}
+        except Exception as e:
+            return {"thought": "Error", "response": f"API Error: {e}"}
 
     def start_task(self, task: Dict[str, Any], notification_queue: Optional[Queue] = None):
         task_id = task["id"]

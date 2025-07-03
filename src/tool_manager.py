@@ -295,5 +295,9 @@ def get_tool_descriptions(allowed_tools: List[str]) -> str:
             func = TOOLS[name]
             doc_lines = [line.strip() for line in func.__doc__.strip().split('\n')]
             formatted_doc = "\n  ".join(doc_lines)
+            
+            if workspace_manager.SANDBOX_ENABLED and name in ["write_file", "read_file", "modify_file", "execute_python_code", "run_shell_command", "run_pytest"]:
+                formatted_doc += "\n  **[SANDBOX] Note: This tool is restricted to the workspace directory.**"
+
             descriptions.append(f"- {name}:\n  {formatted_doc}")
     return "\n".join(descriptions)

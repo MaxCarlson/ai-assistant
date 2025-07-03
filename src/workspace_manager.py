@@ -5,6 +5,8 @@ import re
 from pathlib import Path
 from src import task_manager
 
+SANDBOX_ENABLED = False
+
 def get_task_workspace(task_id: str) -> Path:
     """Gets the root directory where the agent for this task should operate."""
     task = task_manager.get_task(task_id)
@@ -55,21 +57,24 @@ def get_safe_path(task_id: str, relative_path: str) -> Path:
     Returns a safe, absolute path within the task's defined workspace.
     Prevents directory traversal attacks.
     """
-    workspace_path = get_task_workspace(task_id)
-    
-    # os.path.normpath is crucial for security.
-    normalized_relative_path = os.path.normpath(relative_path)
-    
-    if normalized_relative_path.startswith("..") or os.path.isabs(normalized_relative_path):
-        raise PermissionError(f"Path traversal is not allowed: {relative_path}")
-
-    safe_path = (workspace_path / normalized_relative_path).resolve()
-
-    # Final check to ensure the resolved path is within the workspace.
-    if workspace_path not in safe_path.parents and workspace_path != safe_path:
-        raise PermissionError("Attempted to access file outside of workspace")
+    if SANDBOX_ENABLED:
+        workspace_path = get_task_workspace(task_id)
         
-    return safe_path
+        # os.path.normpath is crucial for security.
+        normalized_relative_path = os.path.normpath(relative_path)
+        
+        if normalized_relative_path.startswith("..") or os.path.isabs(normalized_relative_path):
+            raise PermissionError(f"Path traversal is not allowed: {relative_path}")
+
+        safe_path = (workspace_path / normalized_relative_path).resolve()
+
+        # Final check to ensure the resolved path is within the workspace.
+        if workspace_path not in safe_path.parents and workspace_path != safe_path:
+            raise PermissionError("Attempted to access file outside of workspace")
+            
+        return safe_path
+    else:
+        return Path(relative_path).resolve()
 
 def cleanup_workspace(task_id: str):
     """No-op in git-native mode, as we want to keep the branches."""
