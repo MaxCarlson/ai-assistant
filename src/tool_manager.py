@@ -62,25 +62,18 @@ def read_file(task_id: str, file_path: str) -> str:
     except Exception as e:
         return f"Error reading file: {e}"
 
-def modify_file(task_id: str, file_path: str, changes: List[Dict[str, Any]]) -> str:
+def modify_file(task_id: str, file_path: str, search_text: str, replace_text: str) -> str:
     """
-    Modifies a file in the workspace with a series of precise operations (replace, delete, append).
+    Searches for a block of text in a file and replaces it with new text.
 
-    This is the PREFERRED tool for making targeted changes to existing code.
-    It is less error-prone than rewriting the entire file with `write_file`.
-
-    Example of a `changes` list:
-    [
-        { "action": "replace", "line_number": 15, "new_content": "    return x * y" },
-        { "action": "delete", "line_number": 22 },
-        { "action": "append", "content": "# New function added at the end" }
-    ]
+    This tool is more robust than line-based editing for making targeted changes.
+    You should provide enough context in `search_text` to ensure it's a unique match.
 
     Args:
         task_id (str): The ID of the current task.
         file_path (str): The relative path to the file to modify.
-        changes (List[Dict[str, Any]]): A list of dictionaries, each specifying a single change operation.
-                                         Line numbers are 1-based.
+        search_text (str): The exact text to search for in the file.
+        replace_text (str): The new text that will replace the `search_text`.
     """
     if task_id is None:
         return "Error: task_id is a required argument for modify_file."
@@ -90,27 +83,46 @@ def modify_file(task_id: str, file_path: str, changes: List[Dict[str, Any]]) -> 
             return f"Error: File '{file_path}' not found."
         
         with open(full_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-
-        # Note: line numbers are 1-based for the agent, but list indices are 0-based.
-        for change in changes:
-            action = change.get("action")
-            if action == "replace":
-                line_num = change.get("line_number", 0) - 1
-                if 0 <= line_num < len(lines):
-                    lines[line_num] = change.get("new_content", "") + "\n"
-            elif action == "delete":
-                line_num = change.get("line_number", 0) - 1
-                if 0 <= line_num < len(lines):
-                    lines.pop(line_num)
-            elif action == "append":
-                lines.append(change.get("content", "") + "\n")
+            content = f.read()
         
+        new_content = content.replace(search_text, replace_text)
+        
+        if new_content == content:
+            return f"Error: Search text not found in {file_path}."
+
         with open(full_path, 'w', encoding='utf-8') as f:
-            f.writelines(lines)
+            f.write(new_content)
         return f"Successfully modified {file_path}."
     except Exception as e:
         return f"Error modifying file: {e}"
+
+def python(task_id: str, code: str) -> str:
+    """
+    Executes a snippet of Python code and returns its STDOUT and STDERR.
+
+    This tool is useful for:
+    - Quickly testing a piece of logic.
+    - Performing calculations.
+    - Answering questions that require a few lines of code.
+
+    Args:
+        task_id (str): The ID of the current task.
+        code (str): The Python code to execute.
+    """
+    if task_id is None:
+        return "Error: task_id is a required argument for python."
+    try:
+        workspace_dir = workspace_manager.get_task_workspace(task_id)
+        result = subprocess.run(
+            ["python", "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=workspace_dir
+        )
+        return f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    except Exception as e:
+        return f"Error executing Python code: {e}"
 
 
 def execute_python_code(task_id: str, file_path: str) -> str:
@@ -279,7 +291,7 @@ TOOLS: Dict[str, Callable] = {
     "write_file": write_file,
     "read_file": read_file,
     "modify_file": modify_file,
-    "execute_python_code": execute_python_code,
+    "python": python,
     "run_pytest": run_pytest,
     "web_search": web_search,
     "request_user_input": request_user_input,

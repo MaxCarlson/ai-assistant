@@ -58,10 +58,24 @@ def run_cli():
     parser.add_argument("--model", type=str, default="gemini-2.5-pro", help="The model to use for the agent.")
     parser.add_argument("--sandbox", action="store_true", help="Enable sandbox mode.")
     parser.add_argument("--agent", action="store_true", help="Run in agent mode.")
+    parser.add_argument("-t", "--temperature", type=float, default=0.7, help="Set the temperature for the model.")
+    parser.add_argument("--top-p", type=float, default=1.0, help="Set the top-p for the model.")
+    parser.add_argument("--top-k", type=int, default=40, help="Set the top-k for the model.")
+    parser.add_argument("--max-output-tokens", type=int, default=1024, help="Set the maximum number of output tokens.")
+    parser.add_argument("--grounding", action="store_true", help="Enable Google Search grounding.")
     args = parser.parse_args()
 
     try:
-        agent_manager = AgentManager(model_name=args.model, debug=args.debug, sandbox=args.sandbox)
+        agent_manager = AgentManager(
+            model_name=args.model,
+            debug=args.debug,
+            sandbox=args.sandbox,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            top_k=args.top_k,
+            max_output_tokens=args.max_output_tokens,
+            grounding=args.grounding
+        )
         task_id = task_manager.create_task("Chat with user.")
         conversational_agent = CLIAgent(agent_manager=agent_manager, task_id=task_id, agent_mode=args.agent)
         start_chat_loop(agent=conversational_agent, agent_manager=agent_manager, debug=args.debug)

@@ -77,16 +77,22 @@ def format_and_print_thought(thought_text):
 
 from prompt_toolkit.formatted_text import FormattedText
 
-def get_bottom_toolbar(agent_manager):
+def get_bottom_toolbar(agent_manager, agent_mode):
     """Generates the status bar text."""
     cwd = os.path.basename(os.getcwd())
     branch = _get_git_branch()
     model = agent_manager.model_name
     sandbox_status = "on" if workspace_manager.SANDBOX_ENABLED else "off"
+    agent_status = "on" if agent_mode else "off"
+    
     return FormattedText([
-        ('bold blue', f"{cwd} ({branch})"),
-        ('', ' | '),
-        ('bold green', f"{model} (sandbox: {sandbox_status})"),
+        ('class:toolbar.path', f"{cwd} ({branch})"),
+        ('class:toolbar.separator', ' | '),
+        ('class:toolbar.model', f"{model}"),
+        ('class:toolbar.separator', ' | '),
+        ('class:toolbar.status', f"agent: {agent_status}"),
+        ('class:toolbar.separator', ' | '),
+        ('class:toolbar.status', f"sandbox: {sandbox_status}"),
     ])
 
 def start_chat_loop(agent, agent_manager=None, debug=False):
@@ -101,7 +107,7 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
 
     while True:
         try:
-            toolbar = get_bottom_toolbar(agent_manager)
+            toolbar = get_bottom_toolbar(agent_manager, agent.agent_mode)
             user_input = session.prompt("\n\nYou: ", bottom_toolbar=toolbar, refresh_interval=0.5).strip()
             if not user_input:
                 continue
@@ -121,9 +127,25 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
                     status = "enabled" if workspace_manager.SANDBOX_ENABLED else "disabled"
                     console.print(f"[green]Sandbox mode {status}.[/green]")
                     continue
-                if user_input.lower().startswith("/agent"):
-                    agent.agent_mode = True
-                    console.print("[green]Agent mode enabled.[/green]")
+                if user_input.lower() == "/agent":
+                    agent.agent_mode = not agent.agent_mode
+                    status = "enabled" if agent.agent_mode else "disabled"
+                    console.print(f"[green]Agent mode {status}.[/green]")
+                    continue
+                if user_input.lower().startswith("/model"):
+                    parts = user_input.split()
+                    if len(parts) > 1:
+                        model_name = parts[1]
+                        agent_manager.model_name = model_name
+                        console.print(f"[green]Model set to {model_name}.[/green]")
+                    else:
+                        console.print(f"Current model: {agent_manager.model_name}")
+                    continue
+                if user_input.lower() == "/models":
+                    console.print("[bold]Available Models:[/bold]")
+                    console.print("  - gemini-1.5-pro-latest")
+                    console.print("  - gemini-1.5-flash-latest")
+                    console.print("  - gemini-1.0-pro")
                     continue
                 if user_input.lower() == "/help":
                     console.print("[bold]Input Mode:[/bold]")
@@ -133,7 +155,9 @@ def start_chat_loop(agent, agent_manager=None, debug=False):
                     console.print("  /copy                    - Copy the last code block.")
                     console.print("  /clear                   - Clear the conversation history.")
                     console.print("  /sandbox                 - Toggle sandbox mode.")
-                    console.print("  /agent                   - Enable agent mode.")
+                    console.print("  /agent                   - Toggle agent mode.")
+                    console.print("  /model <model_name>      - Switch the model.")
+                    console.print("  /models                  - List available models.")
                     console.print("  /tasks                   - Instructions to open the interactive task viewer TUI.")
                     console.print("  /task_list               - List all tasks and their status.")
                     console.print("  /do <goal>               - Create and immediately start a new agent task.")

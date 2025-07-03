@@ -25,7 +25,7 @@ def _extract_json_from_response(text: str) -> Optional[str]:
     return None
 
 class AgentManager:
-    def __init__(self, model_name="gemini-1.5-pro", debug: bool = False, sandbox: bool = False):
+    def __init__(self, model_name="gemini-1.5-pro", debug: bool = False, sandbox: bool = False, temperature: float = 0.7, top_p: float = 1.0, top_k: int = 40, max_output_tokens: int = 1024, grounding: bool = False):
         try:
             from dotenv import load_dotenv
             load_dotenv()
@@ -34,10 +34,18 @@ class AgentManager:
         self.model_name = model_name
         self.debug = debug
         self.sandbox = sandbox
+        self.temperature = temperature
+        self.top_p = top_p
+        self.top_k = top_k
+        self.max_output_tokens = max_output_tokens
+        self.grounding = grounding
         self.api_key = os.getenv('GEMINI_API_KEY')
         if not self.api_key:
             raise ValueError("GEMINI_API_KEY environment variable not set.")
-        self.api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={self.api_key}"
+
+    @property
+    def api_url(self):
+        return f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={self.api_key}"
 
     def _get_system_prompt(self, goal: str, history: str, allowed_tools: List[str]) -> str:
         """Builds the system prompt dynamically based on the allowed tools."""
@@ -57,6 +65,8 @@ class AgentManager:
             "- **Direct Output vs. File Operations:**",
             "  - If the user asks for a piece of information, a simple code snippet, or a direct answer, you should provide it directly using the `task_complete` tool with the `data` parameter. **Do not write a file unless the user explicitly asks for it or it's a necessary step in a larger coding task.**",
             "  - For complex tasks that require creating or modifying multiple files, building a project, or running tests, you should use the file system tools (`write_file`, `modify_file`, `run_pytest`, etc.).",
+            "- **Using `modify_file`:** This tool is for making targeted changes to a file. Provide enough context in the `search_text` to ensure a unique match. Don't try to fix one line at a time; instead, search for a larger block of code and replace it with the corrected version.",
+            "- **Using `python`:** This tool is for executing small snippets of Python code. It's great for testing logic or performing calculations.",
             "- **Clarification:** If the user's goal is ambiguous, you MUST use `request_user_input` immediately to ask for clarification.",
             "- **Infinite Loops:** To prevent infinite loops, if you find yourself repeating the same action multiple times with the same error, you must stop and use `request_user_input` to ask the user for help.",
             "- **Completion:** When the goal is fully achieved and verified, use the `task_complete` tool to finish the task.",
@@ -104,7 +114,21 @@ class AgentManager:
             prompt += f"{entry['role']}: {entry['content']}\n"
         prompt += f"user: {user_input}"
 
-        payload = {"contents": [{"parts": [{"text": prompt}]}]}
+        generation_config = {
+            "temperature": self.temperature,
+            "topP": self.top_p,
+            "topK": self.top_k,
+            "maxOutputTokens": self.max_output_tokens,
+        }
+
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": generation_config
+        }
+
+        if self.grounding:
+            payload["tools"] = [{"google_search": {}}]
+
         try:
             response = requests.post(self.api_url, json=payload, timeout=120)
             response.raise_for_status()
@@ -142,7 +166,21 @@ class AgentManager:
                     current_task_state["goal"], history_str, current_task_state["allowed_tools"]
                 )
                 
-                payload = {"contents": [{"parts": [{"text": prompt_text}]}]}
+                generation_config = {
+                    "temperature": self.temperature,
+                    "topP": self.top_p,
+                    "topK": self.top_k,
+                    "maxOutputTokens": self.max_output_tokens,
+                }
+
+                payload = {
+                    "contents": [{"parts": [{"text": prompt_text}]}],
+                    "generationConfig": generation_config
+                }
+
+                if self.grounding:
+                    payload["tools"] = [{"google_search": {}}]
+
                 try:
                     response = requests.post(self.api_url, json=payload, timeout=120)
                     response.raise_for_status()
