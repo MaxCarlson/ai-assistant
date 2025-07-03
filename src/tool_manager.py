@@ -13,11 +13,19 @@ from src import workspace_manager
 
 def write_file(task_id: str, file_path: str, content: str) -> str:
     """
-    Writes the given string content to a file in the workspace.
-    This overwrites the entire file. For small changes, consider using 'modify_file'.
-    :param task_id: The ID of the current task.
-    :param file_path: The relative path to the file within the workspace.
-    :param content: The plain text content to write to the file.
+    Writes content to a new or existing file in the task's workspace, overwriting it completely.
+
+    Use this tool to:
+    - Create a new file from scratch.
+    - Completely replace the contents of an existing file.
+
+    CRITICAL: For making small, targeted changes to an existing file (e.g., fixing a single line of code),
+    you MUST use the `modify_file` tool instead, as it is safer and more precise.
+
+    Args:
+        task_id (str): The ID of the current task.
+        file_path (str): The relative path to the file within the workspace (e.g., 'src/main.py').
+        content (str): The entire string content to write to the file.
     """
     if task_id is None:
         return "Error: task_id is a required argument for write_file."
@@ -32,9 +40,16 @@ def write_file(task_id: str, file_path: str, content: str) -> str:
 
 def read_file(task_id: str, file_path: str) -> str:
     """
-    Reads the content of a file from the workspace and returns it as a string.
-    :param task_id: The ID of the current task.
-    :param file_path: The relative path to the file within the workspace.
+    Reads the entire content of a specified file from the task's workspace and returns it as a string.
+
+    Use this tool to:
+    - Examine the contents of a file to understand its purpose, logic, or structure.
+    - Get the necessary context before using `modify_file` or `write_file`.
+    - Verify the result of a previous file operation.
+
+    Args:
+        task_id (str): The ID of the current task.
+        file_path (str): The relative path to the file within the workspace (e.g., 'src/main.py').
     """
     if task_id is None:
         return "Error: task_id is a required argument for read_file."
@@ -49,14 +64,23 @@ def read_file(task_id: str, file_path: str) -> str:
 
 def modify_file(task_id: str, file_path: str, changes: List[Dict[str, Any]]) -> str:
     """
-    Modifies a file in the workspace based on a list of changes.
-    Use this for targeted edits instead of overwriting the whole file.
-    :param task_id: The ID of the current task.
-    :param file_path: The relative path to the file to modify.
-    :param changes: A list of change operations. Each change is a dictionary.
-                    Example: [{"action": "replace", "line_number": 5, "new_content": "corrected code"},
-                              {"action": "delete", "line_number": 10},
-                              {"action": "append", "content": "new line at the end"}]
+    Modifies a file in the workspace with a series of precise operations (replace, delete, append).
+
+    This is the PREFERRED tool for making targeted changes to existing code.
+    It is less error-prone than rewriting the entire file with `write_file`.
+
+    Example of a `changes` list:
+    [
+        { "action": "replace", "line_number": 15, "new_content": "    return x * y" },
+        { "action": "delete", "line_number": 22 },
+        { "action": "append", "content": "# New function added at the end" }
+    ]
+
+    Args:
+        task_id (str): The ID of the current task.
+        file_path (str): The relative path to the file to modify.
+        changes (List[Dict[str, Any]]): A list of dictionaries, each specifying a single change operation.
+                                         Line numbers are 1-based.
     """
     if task_id is None:
         return "Error: task_id is a required argument for modify_file."
@@ -91,10 +115,14 @@ def modify_file(task_id: str, file_path: str, changes: List[Dict[str, Any]]) -> 
 
 def execute_python_code(task_id: str, file_path: str) -> str:
     """
-    Executes a Python script from the task's workspace.
-    IMPORTANT: This tool ONLY accepts a 'file_path'. It does NOT accept raw code.
-    :param task_id: The ID of the current task.
-    :param file_path: The relative path to the Python script to execute.
+    Executes a Python script from the task's workspace and captures its STDOUT and STDERR.
+
+    CRITICAL: This tool can only execute an existing file. It CANNOT execute raw Python code directly.
+    You must first write the code to a file using `write_file` and then execute it using this tool.
+
+    Args:
+        task_id (str): The ID of the current task.
+        file_path (str): The relative path to the Python script to execute (e.g., 'src/main.py').
     """
     if task_id is None:
         return "Error: task_id is a required argument for execute_python_code."
@@ -114,10 +142,15 @@ def execute_python_code(task_id: str, file_path: str) -> str:
 
 def run_pytest(task_id: str, args: Optional[List[str]] = None) -> str:
     """
-    Runs pytest within the task's workspace. Automatically handles PYTHONPATH.
-    If '--cov' is in the arguments, it will attempt to install 'pytest-cov' if not found.
-    :param task_id: The ID of the current task.
-    :param args: Optional list of arguments to pass to pytest (e.g., ['-vv', '--cov']).
+    Runs the pytest test suite within the task's workspace and returns the results.
+
+    This tool automatically handles the PYTHONPATH, so you do not need to worry about module import issues
+    related to the workspace structure. If you encounter a `ModuleNotFoundError`, it means the `import`
+    statement within your test file is incorrect. Use `read_file` and `modify_file` to fix the test code.
+
+    Args:
+        task_id (str): The ID of the current task.
+        args (Optional[List[str]]): A list of command-line arguments to pass to pytest (e.g., ['-v', 'tests/']).
     """
     if task_id is None:
         return "Error: task_id is a required argument for run_pytest."
@@ -153,10 +186,16 @@ def run_pytest(task_id: str, args: Optional[List[str]] = None) -> str:
 
 def web_search(query: str, num_results: int = 5) -> str:
     """
-    Performs a web search using DuckDuckGo's HTML interface and returns the results.
-    This tool has no special dependencies and does not require an API key.
-    :param query: The search query.
-    :param num_results: The maximum number of results to return.
+    Performs a web search using the DuckDuckGo search engine to find information on the internet.
+
+    Use this tool when you need to:
+    - Find information about a library, API, or programming concept.
+    - Look up error messages or solutions to technical problems.
+    - Gather general knowledge to help inform your plan to solve the user's goal.
+
+    Args:
+        query (str): The search query.
+        num_results (int): The maximum number of search results to return.
     """
     url = "https://html.duckduckgo.com/html/"
     params = {"q": query}
@@ -173,17 +212,27 @@ def web_search(query: str, num_results: int = 5) -> str:
 
 def request_user_input(task_id: str, question: str) -> str:
     """
-    Pauses the task and asks the user for input. The user will respond with a separate command.
-    :param task_id: The ID of the current task.
-    :param question: The question to ask the user.
+    Pauses the current task and asks the user for clarification or additional information.
+
+    Use this tool ONLY when you are blocked and cannot proceed without input from the user.
+    For example, if the user's request is ambiguous or you need them to make a decision.
+
+    Args:
+        task_id (str): The ID of the current task.
+        question (str): The specific question you need to ask the user.
     """
     return f"Task paused. User was asked: {question}"
 
 def task_complete(task_id: str, reason: str) -> str:
     """
-    Call this tool ONLY when the user's request has been fully satisfied.
-    :param task_id: The ID of the current task.
-    :param reason: A brief summary of why the task is considered complete.
+    Marks the current task as complete. Call this tool ONLY when the user's request has been fully satisfied.
+
+    CRITICAL: Do not use this tool if you have only completed a part of the task or if you are unsure
+    if the user's goal has been met. Always confirm the work is done before calling this.
+
+    Args:
+        task_id (str): The ID of the current task.
+        reason (str): A brief, one-sentence summary of how you completed the task.
     """
     return f"Task marked as complete by the agent. Reason: {reason}"
 

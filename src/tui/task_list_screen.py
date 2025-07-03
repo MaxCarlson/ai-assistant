@@ -1,4 +1,6 @@
 import threading
+from queue import Queue, Empty
+from typing import Dict, Any
 from textual.screen import Screen
 from textual.widgets import Header, Footer, DataTable
 from textual.binding import Binding
@@ -16,25 +18,38 @@ class TaskListScreen(Screen):
         Binding("d", "delete_task", "Delete Task"),
     ]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.notification_queue = Queue()
+
     def compose(self):
         yield Header("Task List")
         yield DataTable(id="task_table", cursor_type="row")
         yield Footer()
 
     def on_mount(self):
-        """Set up the table and a timer to refresh it periodically."""
+        """Set up the table and timers to refresh it and check for notifications."""
         table = self.query_one(DataTable)
         table.add_columns("ID", "Status", "Goal")
         self.update_tasks()
         self.set_interval(2, self.update_tasks)
+        self.set_interval(0.5, self.check_notifications) # Check for messages frequently
 
-    def _start_task_in_background(self, task_id: str):
-        """Helper method to start an agent task in a new thread."""
+    def check_notifications(self):
+        """Checks the queue for messages from agent threads and displays them."""
+        try:
+            message = self.notification_queue.get_nowait()
+            self.sub_title = message
+        except Empty:
+            pass
+
+    def _start_task_in_background(self, task: Dict[str, Any]):
+        """Helper method to start an agent task in a new thread with a notification queue."""
         agent = agent_manager.AgentManager(debug=True)
-        task_thread = threading.Thread(target=agent.start_task, args=(task_id,))
-        task_thread.daemon = True
+        # Pass the entire task dictionary to avoid race conditions
+        task_thread = threading.Thread(target=agent.start_task, args=(task, self.notification_queue))
         task_thread.start()
-        self.sub_title = f"Task {task_id} started/resumed in background"
+        self.sub_title = f"Task {task['id']} started/resumed in background"
 
     def update_tasks(self) -> None:
         """Clears and re-populates the task table with the latest data."""
@@ -63,7 +78,9 @@ class TaskListScreen(Screen):
         def on_dismiss(task_id: str | None):
             if task_id:
                 self.update_tasks()
-                self._start_task_in_background(task_id)
+                new_task = task_manager.get_task(task_id)
+                if new_task:
+                    self._start_task_in_background(new_task)
         
         self.app.push_screen(AddTaskScreen(), on_dismiss)
 
@@ -85,12 +102,18 @@ class TaskListScreen(Screen):
             return
         
         task = task_manager.get_task(task_id)
+        if not task:
+            return
+
         resumable_states = ['pending', 'in_progress', 'failed']
         if task and task['status'] in resumable_states:
-            self._start_task_in_background(task['id'])
+            self._start_task_in_background(task)
         elif task and task['status'] == 'completed_max_steps':
             task_manager.extend_task_steps(task_id)
-            self._start_task_in_background(task_id)
+            # Refetch the task after extending steps
+            updated_task = task_manager.get_task(task_id)
+            if updated_task:
+                self._start_task_in_background(updated_task)
 
     def action_clone_task(self) -> None:
         """Called when 'c' is pressed. Creates a new task from an existing one."""
@@ -107,7 +130,9 @@ class TaskListScreen(Screen):
                 working_dir=original_task.get('working_dir')
             )
             self.update_tasks()
-            self._start_task_in_background(new_task_id)
+            new_task = task_manager.get_task(new_task_id)
+            if new_task:
+                self._start_task_in_background(new_task)
             self.sub_title = f"Cloned task {task_id} to new task {new_task_id}"
 
     def action_delete_task(self) -> None:
