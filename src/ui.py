@@ -1,64 +1,25 @@
-import re
-import pyperclip
 import asyncio
 import os
+import re
 import subprocess
+
+from prompt_toolkit import PromptSession
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.formatted_text import FormattedText
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.syntax import Syntax
-from rich.text import Text
-from prompt_toolkit import PromptSession
-from prompt_toolkit.history import InMemoryHistory
-from prompt_toolkit.key_binding import KeyBindings
+
 from src import task_manager, workspace_manager
 
 console = Console()
-last_code_block = None
-queued_input = None
 
 def _get_git_branch():
     try:
         return subprocess.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD']).strip().decode('utf-8')
     except Exception:
         return "not a git repo"
-
-def copy_last_code_to_clipboard():
-    """Copies the last detected code block to the clipboard."""
-    global last_code_block
-    if last_code_block:
-        try:
-            pyperclip.copy(last_code_block)
-            console.print("[green]✅ Code copied to clipboard![/green]")
-        except pyperclip.PyperclipException as e:
-            console.print(f"[red]❌ Error copying to clipboard: {e}[/red]")
-    else:
-        console.print("[yellow]⚠️ No code block in the last response to copy.[/yellow]")
-
-def format_and_print_response(response_text):
-    """Processes the AI response, detecting and formatting Markdown and code blocks."""
-    global last_code_block
-    last_code_block = None
-    code_block_pattern = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
-    parts = code_block_pattern.split(response_text)
-    if parts[0].strip():
-        console.print(Markdown(parts[0].strip()))
-    for i in range(1, len(parts), 3):
-        lang = parts[i].strip().lower() or "text"
-        code = parts[i+1].strip()
-        last_code_block = code
-        syntax = Syntax(code, lang, theme="monokai", line_numbers=True, word_wrap=True)
-        console.print(Panel(syntax, title=f"Code ({lang})", expand=False, border_style="blue"))
-        if (i + 2) < len(parts) and parts[i+2].strip():
-            console.print(Markdown(parts[i+2].strip()))
-    if last_code_block:
-        console.print("\n[dim]Type '/copy' to copy the last code block to the clipboard.[/dim]")
-
-def format_and_print_thought(thought_text):
-    """Processes the AI thought, detecting and formatting Markdown and code blocks."""
-    console.print(Panel(Markdown(thought_text), title="Thought", border_style="yellow", expand=False))
-
-from prompt_toolkit.formatted_text import FormattedText
 
 def get_bottom_toolbar(agent_manager, agent_mode):
     """Generates the status bar text."""
@@ -69,198 +30,77 @@ def get_bottom_toolbar(agent_manager, agent_mode):
     agent_status = "on" if agent_mode else "off"
     
     return FormattedText([
-        ('class:toolbar.path', f"~/projects/ai-assistant ({branch})"),
-        ('class:toolbar.separator', ' '),
-        ('class:toolbar.sandbox', f"no sandbox (see /docs)"),
-        ('class:toolbar.separator', ' '),
-        ('class:toolbar.model', f"{model}"),
-        ('class:toolbar.separator', ' '),
-        ('class:toolbar.status', f"({agent_status} agent)"),
+        ('bold', f" {cwd} ({branch}) "),
+        ('', '|'),
+        ('bold', f" {model} "),
+        ('', '|'),
+        ('', f" agent: {agent_status} "),
+        ('', '|'),
+        ('', f" sandbox: {sandbox_status} "),
     ])
 
+def format_and_print_response(response_text):
+    """Processes the AI response, detecting and formatting Markdown and code blocks."""
+    code_block_pattern = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
+    parts = code_block_pattern.split(response_text)
+    if parts[0].strip():
+        console.print(Markdown(parts[0].strip()))
+    for i in range(1, len(parts), 3):
+        lang = parts[i].strip().lower() or "text"
+        code = parts[i+1].strip()
+        syntax = Syntax(code, lang, theme="monokai", line_numbers=True, word_wrap=True)
+        console.print(Panel(syntax, title=f"Code ({lang})", expand=False, border_style="blue"))
+        if (i + 2) < len(parts) and parts[i+2].strip():
+            console.print(Markdown(parts[i+2].strip()))
+
+def format_and_print_thought(thought_text):
+    """Processes the AI thought, detecting and formatting Markdown and code blocks."""
+    console.print(Panel(Markdown(thought_text), title="Thought", border_style="yellow", expand=False))
+
 async def start_chat_loop(agent, agent_manager=None, debug=False):
-    """Handles the interactive AI chat session with command history and async tasks."""
-    global queued_input
-    conversation_history = []
-    session = PromptSession(history=InMemoryHistory())
-    
+    """Handles the interactive AI chat session."""
+    session = PromptSession(history=None)
     console.print("[bold green]AI Assistant Initialized. Type '/exit' or '/help'.[/bold green]", justify="center")
-
-    bindings = KeyBindings()
-
-    @bindings.add('c-j')
-    def _(event):
-        global queued_input
-        queued_input = event.app.current_buffer.text
-        console.print(f"\n[yellow]Input queued: '{queued_input}'[/yellow]")
-        event.app.current_buffer.text = ""
-
-    @bindings.add('c-c')
-    def _(event):
-        global queued_input
-        if queued_input:
-            queued_input = None
-            console.print("\n[yellow]Queued input cancelled.[/yellow]")
-        else:
-            event.app.exit()
 
     while True:
         try:
             toolbar = get_bottom_toolbar(agent_manager, agent.agent_mode)
-            if queued_input:
-                user_input = queued_input
-                queued_input = None
-            else:
-                user_input = (await session.prompt_async(
-                    [
-                        ('class:prompt', '> '),
-                        ('class:input', ' Type your message or @path/to/file')
-                    ],
-                    bottom_toolbar=toolbar,
-                    key_bindings=bindings,
-                    refresh_interval=0.5
-                )).strip()
+            
+            user_input = await session.prompt_async(
+                '> ',
+                bottom_toolbar=toolbar,
+                multiline=False,
+            )
+
             if not user_input:
                 continue
 
             if user_input.lower().startswith('/'):
+                # Handle commands
                 if user_input.lower() in ["/exit", "/quit"]:
                     break
-                if user_input.lower() == "/copy":
-                    copy_last_code_to_clipboard()
-                    continue
-                if user_input.lower() == "/clear":
-                    conversation_history.clear()
-                    console.print("[yellow]🧹 Conversation history cleared.[/yellow]")
-                    continue
-                if user_input.lower() == "/sandbox":
+                elif user_input.lower() == "/help":
+                    console.print(get_help_text())
+                elif user_input.lower() == "/clear":
+                    console.clear()
+                elif user_input.lower() == "/sandbox":
                     workspace_manager.SANDBOX_ENABLED = not workspace_manager.SANDBOX_ENABLED
                     status = "enabled" if workspace_manager.SANDBOX_ENABLED else "disabled"
-                    console.print(f"[green]Sandbox mode {status}.[/green]")
-                    continue
-                if user_input.lower() == "/agent":
+                    console.print(f"Sandbox mode {status}.")
+                elif user_input.lower() == "/agent":
                     agent.agent_mode = not agent.agent_mode
                     status = "enabled" if agent.agent_mode else "disabled"
-                    console.print(f"[green]Agent mode {status}.[/green]")
-                    continue
-                if user_input.lower().startswith("/model"):
-                    parts = user_input.split()
-                    if len(parts) > 1:
-                        model_name = parts[1]
-                        agent_manager.model_name = model_name
-                        console.print(f"[green]Model set to {model_name}.[/green]")
-                    else:
-                        console.print(f"Current model: {agent_manager.model_name}")
-                    continue
-                if user_input.lower() == "/models":
-                    console.print("[bold]Available Models:[/bold]")
-                    models = agent_manager.list_models()
-                    for model in models:
-                        console.print(f"  - {model.replace('models/', '')}")
-                    continue
-                if user_input.lower().startswith("/config"):
-                    parts = user_input.split()
-                    if len(parts) > 1:
-                        key = parts[1]
-                        if key in ["temperature", "top_p", "top_k", "max_output_tokens"]:
-                            if len(parts) > 2:
-                                value = parts[2]
-                                try:
-                                    if "." in value:
-                                        setattr(agent_manager, key, float(value))
-                                    else:
-                                        setattr(agent_manager, key, int(value))
-                                    console.print(f"[green]{key} set to {getattr(agent_manager, key)}[/green]")
-                                except ValueError:
-                                    console.print(f"[red]Invalid value for {key}[/red]")
-                            else:
-                                console.print(f"Current {key}: {getattr(agent_manager, key)}")
-                        elif key in ["grounding", "code_execution"]:
-                            current_value = getattr(agent_manager, key)
-                            setattr(agent_manager, key, not current_value)
-                            console.print(f"[green]{key} set to {getattr(agent_manager, key)}[/green]")
-                        else:
-                            console.print(f"[red]Unknown config key: {key}[/red]")
-                    else:
-                        console.print("[bold]Current Config:[/bold]")
-                        console.print(f"  - temperature: {agent_manager.temperature}")
-                        console.print(f"  - top_p: {agent_manager.top_p}")
-                        console.print(f"  - top_k: {agent_manager.top_k}")
-                        console.print(f"  - max_output_tokens: {agent_manager.max_output_tokens}")
-                        console.print(f"  - grounding: {agent_manager.grounding}")
-                        console.print(f"  - code_execution: {agent_manager.code_execution}")
-                    continue
-                if user_input.lower() == "/help":
-                    console.print("[bold]Input Mode:[/bold]")
-                    console.print("  - Press [Enter] to send your message.")
-                    console.print("  - Press [Ctrl]+[Enter] to queue a command to run next.")
-                    console.print("  - Press [Ctrl]+[C] to cancel a queued command.")
-                    console.print("[bold]Available Commands:[/bold]")
-                    console.print("  /exit, /quit             - Exit the application.")
-                    console.print("  /copy                    - Copy the last code block.")
-                    console.print("  /clear                   - Clear the conversation history.")
-                    console.print("  /sandbox                 - Toggle sandbox mode.")
-                    console.print("  /agent                   - Toggle agent mode.")
-                    console.print("  /model <model_name>      - Switch the model.")
-                    console.print("  /models                  - List available models.")
-                    console.print("  /config [key] [value]    - View or set model configuration.")
-                    console.print("  /tasks                   - Instructions to open the interactive task viewer TUI.")
-                    console.print("  /task_list               - List all tasks and their status.")
-                    console.print("  /do <goal>               - Create and immediately start a new agent task.")
-                    console.print("  /provide_input <id> <text> - Provide input to a paused task.")
-                    continue
-
-                if user_input.lower() == "/tasks":
-                    console.print("\n[bold yellow]To open the Task Manager TUI, please exit the chat and run:[/bold yellow]")
-                    console.print("  [cyan]python src/cli.py view[/cyan]\n")
-                    continue
-
-                if user_input.lower().startswith("/do "):
-                    goal = user_input[len("/do "):
-].strip()
-                    task_id = task_manager.create_task(goal)
-                    console.print(f"[green]✅ Task '{task_id}' created. Starting in background...[/green]")
-                    task = task_manager.get_task(task_id)
-                    asyncio.create_task(agent.handle_task(goal, conversation_history))
-                    continue
-                
-                if user_input.lower().startswith("/provide_input "):
-                    parts = user_input.split(" ", 2)
-                    if len(parts) < 3:
-                        console.print("[red]Usage: /provide_input <task_id> <your_input_text>[/red]")
-                        continue
-                    task_id, user_response = parts[1], parts[2]
-                    task = task_manager.get_task(task_id)
-                    if task and task['status'] == 'pending_input':
-                        task_manager.log_to_task(task_id, f"User Input: {user_response}")
-                        console.print(f"[yellow]🚀 Resuming task '{task_id}' with your input...[/yellow]")
-                        asyncio.create_task(agent.handle_task(user_response, conversation_history))
-                    else:
-                        console.print(f"[red]Error: Task {task_id} not found or not awaiting input.[/red]")
-                        continue
-
-                if user_input.lower() == "/task_list":
-                    console.print("[bold]Tasks:[/bold]")
-                    tasks = task_manager.get_all_tasks()
-                    if not tasks:
-                        console.print("  No tasks created yet.")
-                    for task in tasks:
-                        console.print(f"  - ID: {task['id']} | Status: {task['status']} | Goal: {task['goal']}")
-                    continue
-                
-                console.print(f"[red]Unknown command: {user_input}[/red]")
+                    console.print(f"Agent mode {status}.")
+                else:
+                    console.print(f"[red]Unknown command: {user_input}[/red]")
                 continue
 
-            # Regular chat logic
             console.print("[yellow]Assistant is thinking...[/yellow]", end="\r")
-            response_data = await agent.handle_task(user_input, conversation_history)
+            response_data = await agent.handle_task(user_input, [])
             console.print(" " * 25, end="\r")
             
             thought = response_data.get("thought", "")
             response_text = response_data.get("response", "")
-
-            conversation_history.append({"role": "user", "content": user_input})
-            conversation_history.append({"role": "assistant", "content": response_data})
             
             if thought:
                 format_and_print_thought(thought)
@@ -274,3 +114,15 @@ async def start_chat_loop(agent, agent_manager=None, debug=False):
             console.print(f"[bold red]An unexpected error occurred in UI loop: {e}[/bold red]")
     
     console.print("[bold red]\nExiting AI Assistant...[/bold red]")
+
+def get_help_text():
+    return """
+[bold]Input Mode:[/bold]
+  - Press [Enter] to send your message.
+  - Press [Esc] followed by [Enter] to create a newline.
+[bold]Available Commands:[/bold]
+  /exit, /quit             - Exit the application.
+  /clear                   - Clear the conversation history.
+  /sandbox                 - Toggle sandbox mode.
+  /agent                   - Toggle agent mode.
+"""

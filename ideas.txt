@@ -5,3 +5,7 @@ also we should setup project catagories that store multiole chats and their hist
 we shoukd also give the ai ai-assistant access to the knowledge managers projects and tasks (and we could ensure that the projects sync between tbem, as the km orojects and yasks are in a database)
 
 also we ahoukd start adding memory.. give the ai-assistant a tool that it can uss to store memories when jt thinks its relevqnt or when told (also we xould have project levek memories)
+
+we ahould also allow the user to set max usage limits, per minute/per day and have tracking that keeps track of used so fsr
+
+we ahould also allow the user to set max usage limits, per minute/per day and have tracking that keeps track of used so fsr

@@ -1,7 +1,6 @@
 import argparse
-import threading
-from queue import Queue
-from src.ui import start_chat_loop, console, format_and_print_thought
+import asyncio
+from src.ui import start_chat_loop
 from src.agent_manager import AgentManager
 from src import task_manager
 import re
@@ -11,31 +10,17 @@ class CLIAgent:
         self.agent_manager = agent_manager
         self.task_id = task_id
         self.agent_mode = agent_mode
-        self.notification_queue = Queue()
 
-    def handle_task(self, user_input: str, conversation_history: list) -> str:
+    async def handle_task(self, user_input: str, conversation_history: list) -> str:
         if self.agent_mode:
             task = task_manager.get_task(self.task_id)
             if not task:
                 return {"thought": "Error", "response": f"Task {self.task_id} not found."}
 
             task_manager.update_task_goal(self.task_id, user_input)
-            agent_thread = threading.Thread(target=self.agent_manager.start_task, args=(task, self.notification_queue))
-            agent_thread.start()
-
-            while agent_thread.is_alive() or not self.notification_queue.empty():
-                while not self.notification_queue.empty():
-                    notification = self.notification_queue.get()
-                    if "AI Thought:" in notification:
-                        thought_text = notification.replace("AI Thought:", "").strip()
-                        format_and_print_thought(thought_text)
-                    elif "Tool" in notification:
-                        console.print(f"[cyan]{notification}[/cyan]")
-                    else:
-                        console.print(f"[green]{notification}[/green]")
             
-            agent_thread.join()
-
+            response = await asyncio.to_thread(self.agent_manager.start_task, task)
+            
             final_task_state = task_manager.get_task(self.task_id)
             history = final_task_state.get("history", [])
             
@@ -50,9 +35,7 @@ class CLIAgent:
             
             return {"thought": "Done", "response": final_response}
         else:
-            return self.agent_manager.get_direct_response(user_input, conversation_history)
-
-import asyncio
+            return await asyncio.to_thread(self.agent_manager.get_direct_response, user_input, conversation_history)
 
 def run_cli():
     parser = argparse.ArgumentParser(description="AI Assistant CLI")
@@ -84,4 +67,4 @@ def run_cli():
         conversational_agent = CLIAgent(agent_manager=agent_manager, task_id=task_id, agent_mode=args.agent)
         asyncio.run(start_chat_loop(agent=conversational_agent, agent_manager=agent_manager, debug=args.debug))
     except Exception as e:
-        console.print(f"[bold red]Initialization Error: {e}[/bold red]")
+        print(f"Initialization Error: {e}")

@@ -45,6 +45,10 @@ def create_task(
     if allowed_tools:
         final_tools.update(allowed_tools)
 
+    # Determine the working directory for the new task
+    task_working_dir = Path("workspaces") / task_id
+    task_working_dir.mkdir(parents=True, exist_ok=True) # Create the directory if it doesn't exist
+
     tasks[task_id] = {
         "id": task_id,
         "goal": goal,
@@ -53,7 +57,7 @@ def create_task(
         "status": "pending",
         "max_steps": max_steps,
         "allowed_tools": list(final_tools),
-        "working_dir": working_dir or str(Path("workspaces").resolve()),
+        "working_dir": str(task_working_dir.resolve()), # Store the absolute path
     }
     _save_tasks(tasks)
     return task_id
